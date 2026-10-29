@@ -1,0 +1,901 @@
+const LOGO = "logo.png";
+
+/* ===================== Konfigurasi & util ===================== */
+const TZ = "Asia/Kuala_Lumpur";
+const DEFAULT_PREMIS = [
+  { id:"kbri",  nama:"KBRI Kuala Lumpur",              alamat:"233 Jalan Tun Razak",              lat:3.14667, lng:101.72194, radius:150 },
+  { id:"wisma", nama:"Wisma Duta Indonesia",           alamat:"Kawasan Jalan U-Thant",            lat:3.15386, lng:101.71838, radius:300 },
+  { id:"sikl",  nama:"Sekolah Indonesia Kuala Lumpur", alamat:"1 Lorong Tun Ismail",              lat:3.16465, lng:101.69080, radius:150 }
+];
+/* Jadwal kerja. Petugas Keamanan memilih shift, kecuali saat bertugas di SIKL (jam tetap SIKL). Fungsi lain memakai jam kantor. */
+const JADWAL_INFO = {
+  umum:   { nama:"Jam kerja kantor",    ket:"Semua fungsi selain Petugas Keamanan" },
+  sikl:   { nama:"Jaga SIKL",           ket:"Petugas Keamanan yang bertugas di Sekolah Indonesia Kuala Lumpur" },
+  pagi:   { nama:"Shift Pagi",          ket:"Petugas Keamanan, tanpa lembur" },
+  lembur: { nama:"Shift Pagi + Lembur", ket:"Petugas Keamanan, dengan lembur" },
+  malam:  { nama:"Shift Malam",         ket:"Petugas Keamanan, sampai pagi hari berikutnya" }
+};
+const DEFAULT_JADWAL = { umum:{mulai:"09:00",selesai:"17:00"}, sikl:{mulai:"08:00",selesai:"15:30"}, pagi:{mulai:"08:00",selesai:"16:30"}, lembur:{mulai:"08:00",selesai:"20:00"}, malam:{mulai:"20:00",selesai:"08:00"} };
+const SHIFT_IDS = ["pagi","lembur","malam"];
+const DEFAULT_CFG = { nama:"KBRI Kuala Lumpur", premis:DEFAULT_PREMIS, jadwal:DEFAULT_JADWAL, toleransi:15 };
+function normCfg(d){ const c={...DEFAULT_CFG,...d}; if(!Array.isArray(c.premis)||!c.premis.length) c.premis=DEFAULT_PREMIS;
+  c.jadwal={...DEFAULT_JADWAL,...(d?.jadwal||{})}; ["lat","lng","radius","alamat","jamMasuk","jamPulang"].forEach(k=>delete c[k]); return c; }
+const isSecurity = f => /keamanan|security|satpam/i.test(String(f||""));
+function jadwalById(id){ const j=S.cfg.jadwal[id]||DEFAULT_JADWAL[id]; return { id, nama:JADWAL_INFO[id].nama, mulai:j.mulai, selesai:j.selesai, lintas: toMin(j.selesai)<=toMin(j.mulai) }; }
+function jadwalFor(fungsi, premisId, shiftId){ return jadwalById(!isSecurity(fungsi) ? "umum" : premisId==="sikl" ? "sikl" : (shiftId||"pagi")); }
+const jadwalText = j => j ? `${j.nama} ${j.mulai}–${j.selesai}` : "";
+/* Saran shift dari jam sekarang */
+function suggestShift(jenis){ const h=+timeStr().slice(0,2); return jenis==="masuk" ? (h>=17||h<5 ? "malam" : "pagi") : (h<12 ? "malam" : h<18 ? "pagi" : "lembur"); }
+/* Premis terdekat: masuk area bila jarak <= radius premis */
+function detectPremis(lat,lng){
+  const all=S.cfg.premis.map(p=>({...p,jarak:haversine(lat,lng,p.lat,p.lng)})).sort((a,b)=>a.jarak-b.jarak);
+  const near=all[0]; return { premis: near.jarak<=near.radius ? near : null, terdekat: near };
+}
+/* Durasi kerja dari dua timestamp ISO */
+function durMin(a,b){ return Math.max(0,Math.round((new Date(b)-new Date(a))/60000)); }
+const fmtDur = m => `${Math.floor(m/60)} j ${String(m%60).padStart(2,"0")} m`;
+function lengkap(r){ return !!(r?.masuk && r?.pulang); }
+function markFor(r){
+  if(!r || (!r.masuk && !r.pulang)) return `<span class="chk none" title="Belum absen">${I.dash}</span>`;
+  return lengkap(r) ? `<span class="chk ok" title="Absen masuk dan pulang lengkap">${I.tick}</span>` : `<span class="chk no" title="${r.masuk?'Belum absen pulang':'Tidak ada absen masuk'}">${I.cross}</span>`;
+}
+function durText(r){
+  if(lengkap(r)) return fmtDur(durMin(r.masuk.ts,r.pulang.ts));
+  if(r?.masuk && Date.now()-new Date(r.masuk.ts) < 16*3600e3) return fmtDur(durMin(r.masuk.ts,new Date().toISOString()))+" (berjalan)";
+  return "—";
+}
+const premisName = x => x?.premisNama || (x?.dalamRadius===false ? "Di luar premis" : (x ? "KBRI Kuala Lumpur" : ""));
+const FUNGSI = ["Petugas Keamanan / Security","Staff Keuangan","Komunikasi","BPKRT","Ekonomi","Politik","Pertahanan","Pensosbud","Pendidikan","Staff Dubes dan DCM","Konsuler","Perhubungan","Riset","Perdagangan","Imigrasi","Hukum","Ketenagakerjaan"];
+
+const $ = (s, el=document) => el.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const initials = n => String(n||"?").trim().split(/\s+/).slice(0,2).map(w=>w[0]).join("").toUpperCase();
+const dateKey = (d=new Date()) => d.toLocaleDateString("en-CA",{timeZone:TZ});
+const timeStr = (d=new Date()) => d.toLocaleTimeString("en-GB",{timeZone:TZ,hour12:false});
+const longDate = (d=new Date()) => d.toLocaleDateString("id-ID",{timeZone:TZ,weekday:"long",day:"numeric",month:"long",year:"numeric"});
+const shortDate = key => new Date(key+"T12:00:00+08:00").toLocaleDateString("id-ID",{timeZone:TZ,weekday:"short",day:"numeric",month:"short"});
+const toMin = hhmm => { const [h,m]=String(hhmm||"0:0").split(":").map(Number); return h*60+(m||0); };
+function haversine(a,b,c,d){const R=6371e3,t=x=>x*Math.PI/180;const dl=t(c-a),dg=t(d-b);const h=Math.sin(dl/2)**2+Math.cos(t(a))*Math.cos(t(c))*Math.sin(dg/2)**2;return 2*R*Math.asin(Math.sqrt(h));}
+const fmtDist = m => m>=1000 ? (m/1000).toFixed(1)+" km" : Math.round(m)+" m";
+async function sha256(s){const b=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(s));return [...new Uint8Array(b)].map(x=>x.toString(16).padStart(2,"0")).join("");}
+const randSalt = () => [...crypto.getRandomValues(new Uint8Array(8))].map(x=>x.toString(16).padStart(2,"0")).join("");
+const store = { get(k){try{return localStorage.getItem(k)}catch(e){return null}}, set(k,v){try{localStorage.setItem(k,v)}catch(e){}}, del(k){try{localStorage.removeItem(k)}catch(e){}} };
+function toast(msg){const t=document.createElement("div");t.className="toast";t.textContent=msg;document.body.appendChild(t);setTimeout(()=>t.remove(),2600);}
+
+const I = {
+  tick:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>',
+  cross:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round"><path d="M7 7l10 10M17 7L7 17"/></svg>',
+  dash:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M7 12h10"/></svg>',
+  bldg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s-7-6.2-7-12a7 7 0 0 1 14 0c0 5.8-7 12-7 12z"/><circle cx="12" cy="9" r="2.5"/></svg>',
+  logo:'<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 21V9l8-5 8 5v12"/><path d="M9 21v-6h6v6"/><path d="M12 4v-2"/></svg>',
+  home:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l9-7 9 7"/><path d="M5 10v10h14V10"/></svg>',
+  hist:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>',
+  user:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6"/></svg>',
+  chart:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="5"/><path d="M8 16v-4M12 16V8M16 16v-6"/></svg>',
+  team:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c1-3.5 3.5-5 6.5-5s5.5 1.5 6.5 5"/><circle cx="17" cy="9" r="2.5"/><path d="M17 14c2.5 0 4 1.5 4.5 4"/></svg>',
+  gear:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>',
+  pin:'<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s-7-6.2-7-12a7 7 0 0 1 14 0c0 5.8-7 12-7 12z"/><circle cx="12" cy="9" r="2.5"/></svg>',
+  face:'<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8V6a2 2 0 0 1 2-2h2M16 4h2a2 2 0 0 1 2 2v2M20 16v2a2 2 0 0 1-2 2h-2M8 20H6a2 2 0 0 1-2-2v-2"/><path d="M9 10h.01M15 10h.01M9.5 15a3.5 3.5 0 0 0 5 0"/></svg>',
+  in:'<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><path d="M10 17l5-5-5-5M15 12H3"/></svg>',
+  out:'<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5M21 12H9"/></svg>',
+  eye:'<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>',
+  check:'<svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M8 12.5l3 3 5-6"/></svg>',
+  sheet:'<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="3" width="16" height="18" rx="3"/><path d="M4 9h16M4 15h16M10 9v12"/></svg>',
+  dl:'<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg>',
+  copy:'<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="8" width="12" height="12" rx="3"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg>'
+};
+
+/* ===================== State ===================== */
+const S = { db:null, auth:null, booted:false, setupNeeded:false, wajah:undefined, cfg:{...DEFAULT_CFG}, me:null, tab:null,
+  today:null, history:[], staff:[], rekapDate:dateKey(), rekap:[], subs:[], rekapUnsub:null, stream:null };
+
+/* Re-render only when the current screen shows the data that changed, so typing in a form is never wiped */
+const DEPS={home:["cfg","today","history","cuaca","wajah"],riwayat:["history"],profil:["wajah"],rekap:["cfg","staff","rekap"],staff:["staff"],atur:[]};
+function refresh(k){ if(S.me && (DEPS[S.tab]||[]).includes(k)) render(); }
+function clearSubs(){ S.subs.forEach(u=>{try{u()}catch(e){}}); S.subs=[]; if(S.rekapUnsub){try{S.rekapUnsub()}catch(e){} S.rekapUnsub=null;} if(S.todayUnsub){try{S.todayUnsub()}catch(e){} S.todayUnsub=null;} if(S.ydayUnsub){try{S.ydayUnsub()}catch(e){} S.ydayUnsub=null;} }
+
+/* ===================== Boot ===================== */
+render();
+setInterval(()=>{ const c=$("#clock"); if(c){ const t=timeStr(); c.innerHTML=t.slice(0,5)+'<small>:'+t.slice(6)+'</small>'; }
+  if (S.me && S.me.role!=="admin" && S.db && S.me.uid && S.dayKey && S.dayKey!==dateKey()) { subToday(); render(); }
+  const d=$("#durLive"); if(d && S.me){ const a=activeRec().rec; if(a?.masuk && !a.pulang) d.textContent=fmtDur(durMin(a.masuk.ts,new Date().toISOString())); } },1000);
+
+/* Firebase: login (Authentication), database (Firestore), offline cache */
+const configOk = () => !!(window.FIREBASE_CONFIG && FIREBASE_CONFIG.apiKey && !/GANTI|YOUR_/i.test(FIREBASE_CONFIG.apiKey));
+const emailOf = u => `${u}@${window.EMAIL_DOMAIN || "e-absensi.local"}`;
+(async () => {
+  if (!configOk() || !window.firebase) { S.booted = "noconfig"; render(); return; }
+  firebase.initializeApp(FIREBASE_CONFIG);
+  S.auth = firebase.auth(); S.db = firebase.firestore();
+  try { await S.db.enablePersistence({ synchronizeTabs:true }); } catch(e){}
+  try { const st = await S.db.doc("config/setup").get(); S.setupNeeded = !st.exists; } catch(e){ S.setupNeeded = false; }
+  S.auth.onAuthStateChanged(async u => {
+    if (S.settingUp) return;            // penyiapan pertama mengurus sesinya sendiri
+    if (!u) { if (S.me) endSession(); S.booted = true; render(); return; }
+    try {
+      const s = await S.db.doc("staff/"+u.uid).get();
+      if (!s.exists || s.data().aktif === false) { await S.auth.signOut(); S.booted = true; S.loginMsg = "Akun ini tidak aktif atau belum terdaftar sebagai staf. Hubungi admin."; render(); return; }
+      S.booted = true; startSession({ ...s.data(), uid:u.uid });
+    } catch(e) { S.booted = true; S.loginMsg = "Tidak bisa memuat data akun. Periksa koneksi lalu coba lagi."; render(); }
+  });
+})();
+
+/* ===================== Auth ===================== */
+async function login(e){
+  e.preventDefault();
+  const u = $("#lu").value.trim().toLowerCase(), p = $("#lp").value, err = $("#lerr"), btn = $("#lbtn");
+  err.hidden = true; S.loginMsg = "";
+  if (!S.auth) { err.textContent = "Aplikasi belum terhubung ke Firebase. Isi config.js terlebih dahulu."; err.hidden=false; return; }
+  if (!u || !p) { err.textContent = "Isi username dan password."; err.hidden=false; return; }
+  if (!/^[a-z0-9._-]{3,40}$/.test(u)) { err.textContent = "Username atau password salah."; err.hidden=false; return; }
+  btn.disabled = true; btn.textContent = "Memeriksa…";
+  try { await S.auth.signInWithEmailAndPassword(emailOf(u), p); }
+  catch(ex) {
+    const c = ex?.code || "";
+    err.textContent = /too-many-requests/.test(c) ? "Terlalu banyak percobaan. Tunggu beberapa menit lalu coba lagi."
+      : /network/.test(c) ? "Tidak ada koneksi internet. Periksa jaringan lalu coba lagi."
+      : "Username atau password salah.";
+    err.hidden=false; btn.disabled=false; btn.textContent="Masuk";
+  }
+}
+function endSession(){ closeSheet(); clearSubs(); S.me=null; S.tab=null; S.today=null; S.yday=null; S.history=[]; S.staff=[]; S.rekap=[]; S.dayKey=null; S.wajah=undefined; }
+async function logout(){ endSession(); render(); try { await S.auth?.signOut(); } catch(e){} }
+
+/* Penyiapan pertama: membuat akun admin pertama dan pengaturan awal dalam satu batch */
+async function setupFirstAdmin(e){
+  e.preventDefault();
+  const nama=$("#suNama").value.trim(), u=$("#suUser").value.trim().toLowerCase(), p=$("#suPass").value, err=$("#suErr"), btn=$("#suBtn");
+  const fail=m=>{ err.textContent=m; err.hidden=false; btn.disabled=false; btn.textContent="Buat akun admin"; };
+  err.hidden=true;
+  if(!nama) return fail("Isi nama admin.");
+  if(!/^[a-z0-9._-]{3,40}$/.test(u)) return fail("Username 3–40 karakter: huruf kecil, angka, titik, strip.");
+  if(p.length<8) return fail("Password admin minimal 8 karakter.");
+  btn.disabled=true; btn.textContent="Menyiapkan…"; S.settingUp=true;
+  try {
+    const cred = await S.auth.createUserWithEmailAndPassword(emailOf(u), p);
+    const uid = cred.user.uid, b = S.db.batch();
+    b.set(S.db.doc("config/setup"), { done:true, admin:uid, dibuat:new Date().toISOString() });
+    b.set(S.db.doc("config/kantor"), { ...DEFAULT_CFG });
+    b.set(S.db.doc("staff/"+uid), { uid, nama, fungsi:"Admin Kepegawaian", username:u, role:"admin", aktif:true, dibuat:new Date().toISOString() });
+    await b.commit();
+    S.setupNeeded=false; S.settingUp=false;
+    const s = await S.db.doc("staff/"+uid).get(); startSession({ ...s.data(), uid });
+  } catch(ex) {
+    S.settingUp=false; try{ if(S.auth.currentUser) await S.auth.currentUser.delete(); }catch(_){}
+    const c=ex?.code||"";
+    fail(/email-already-in-use/.test(c) ? "Username itu sudah dipakai." : /weak-password/.test(c) ? "Password terlalu lemah." : "Penyiapan gagal. Pastikan Authentication (Email/Password) dan Firestore sudah aktif, lalu coba lagi.");
+  }
+}
+
+function startSession(d){
+  clearSubs();
+  S.me = d; S.tab = d.role === "admin" ? "rekap" : "home";
+  S.subs.push(S.db.doc("config/kantor").onSnapshot(s => { if (s.exists) { S.cfg = normCfg(s.data()); refresh("cfg"); } }, ()=>{}));
+  if (d.role === "admin") {
+    S.subs.push(S.db.collection("staff").onSnapshot(q => { S.staff = q.docs.map(x=>({...x.data(), uid:x.id})).sort((a,b)=>String(a.nama).localeCompare(String(b.nama))); refresh("staff"); }, ()=>{}));
+    subRekap();
+  } else {
+    subToday();
+    startWeather();
+    S.subs.push(S.db.collection("absensi").where("uid","==",d.uid).onSnapshot(q => { S.history = q.docs.map(x=>x.data()).sort((a,b)=>b.tanggal.localeCompare(a.tanggal)).slice(0,30); refresh("history"); }, ()=>{}));
+    S.subs.push(S.db.doc("staff/"+d.uid).onSnapshot(s => { if (!s.exists || s.data().aktif===false) { toast("Akun tidak aktif lagi."); logout(); } else { S.me = { ...s.data(), uid:d.uid }; } }, ()=>{}));
+    S.subs.push(S.db.doc("wajah/"+d.uid).onSnapshot(s => { S.wajah = s.exists ? s.data() : null; refresh("wajah"); }, ()=>{ S.wajah = null; }));
+  }
+  render();
+}
+/* Today's record; re-subscribed when the date changes while the app stays open */
+function subToday(){
+  if (S.todayUnsub) { try{S.todayUnsub()}catch(e){} }
+  if (S.ydayUnsub) { try{S.ydayUnsub()}catch(e){} }
+  S.dayKey = dateKey(); S.today = null; S.yday = null;
+  const yKey = dateKey(new Date(Date.now()-86400000));
+  S.todayUnsub = S.db.doc("absensi/"+S.dayKey+"_"+S.me.uid).onSnapshot(s => { S.today = s.exists ? s.data() : null; refresh("today"); }, ()=>{});
+  S.ydayUnsub = S.db.doc("absensi/"+yKey+"_"+S.me.uid).onSnapshot(s => { S.yday = s.exists ? s.data() : null; refresh("today"); }, ()=>{});
+}
+function subRekap(){
+  if (S.rekapUnsub) { try{S.rekapUnsub()}catch(e){} }
+  S.rekap = [];
+  S.rekapUnsub = S.db.collection("absensi").where("tanggal","==",S.rekapDate).onSnapshot(q => { S.rekap = q.docs.map(x=>x.data()); refresh("rekap"); }, ()=>{});
+}
+
+/* ===================== Cuaca ===================== */
+/* Cuaca Kuala Lumpur langsung dari Open-Meteo (gratis, tanpa kunci API), diperbarui tiap 30 menit */
+const WMO = c => c===0 ? ["sun","Cerah"] : c===1 ? ["sun","Cerah berawan"] : c===2 ? ["cloud","Berawan"] : c===3 ? ["cloud","Mendung"]
+  : (c===45||c===48) ? ["fog","Kabut"] : (c>=51&&c<=57) ? ["rain", c>=55?"Gerimis lebat":"Gerimis"] : (c>=61&&c<=67) ? ["rain", c>=65?"Hujan lebat":c>=63?"Hujan":"Hujan ringan"]
+  : (c>=80&&c<=82) ? ["rain", c===82?"Hujan deras":"Hujan lokal"] : c>=95 ? ["storm", c>=96?"Badai petir lebat":"Badai petir"] : ["cloud","Berawan"];
+let wxTimer=null;
+async function loadWeather(){
+  try{
+    const url="https://api.open-meteo.com/v1/forecast?latitude=3.1467&longitude=101.7219&current=temperature_2m,weather_code,is_day&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max&timezone=Asia%2FKuala_Lumpur&forecast_days=1";
+    const d=await fetch(url).then(r=>r.json()); const [jenis,kondisi]=WMO(d.current.weather_code);
+    S.cuaca={ suhu:d.current.temperature_2m, kondisi, jenis, siang:!!d.current.is_day, tinggi:d.daily.temperature_2m_max[0], rendah:d.daily.temperature_2m_min[0], hujan:d.daily.precipitation_probability_max[0], diperbarui:new Date().toISOString() };
+    store.set("cuaca", JSON.stringify(S.cuaca)); refresh("cuaca");
+  }catch(e){ try{ const c=JSON.parse(store.get("cuaca")||"null"); if(c){ S.cuaca=c; refresh("cuaca"); } }catch(_){} }
+}
+function startWeather(){ if(wxTimer) return; loadWeather(); wxTimer=setInterval(loadWeather, 30*60*1000); }
+const WX_ICON = {
+  sun:'<svg viewBox="0 0 48 48"><circle cx="24" cy="24" r="10" fill="#FFE27A"/><g stroke="#FFF3B0" stroke-width="3.5" stroke-linecap="round"><path d="M24 4v6M24 38v6M4 24h6M38 24h6M9.9 9.9l4.2 4.2M33.9 33.9l4.2 4.2M9.9 38.1l4.2-4.2M33.9 14.1l4.2-4.2"/></g></svg>',
+  moon:'<svg viewBox="0 0 48 48"><path d="M31 6a17 17 0 1 0 11 29A14 14 0 0 1 31 6z" fill="#FFF1B8"/><circle cx="12" cy="10" r="1.6" fill="#fff"/><circle cx="40" cy="14" r="1.2" fill="#fff"/></svg>',
+  cloud:'<svg viewBox="0 0 48 48"><path d="M15 36h20a9 9 0 0 0 0-18 12 12 0 0 0-23 3A7.5 7.5 0 0 0 15 36z" fill="#fff"/></svg>',
+  rain:'<svg viewBox="0 0 48 48"><path d="M15 30h20a8 8 0 0 0 0-16 11 11 0 0 0-21 3A6.5 6.5 0 0 0 15 30z" fill="#fff"/><g stroke="#BFF1FF" stroke-width="3" stroke-linecap="round"><path d="M17 35l-2 5M25 35l-2 5M33 35l-2 5"/></g></svg>',
+  storm:'<svg viewBox="0 0 48 48"><path d="M15 28h20a8 8 0 0 0 0-16 11 11 0 0 0-21 3A6.5 6.5 0 0 0 15 28z" fill="#fff"/><path d="M26 28l-6 9h5l-3 8 9-11h-5l3-6z" fill="#FFD84D"/></svg>',
+  fog:'<svg viewBox="0 0 48 48"><path d="M15 26h20a8 8 0 0 0 0-16 11 11 0 0 0-21 3A6.5 6.5 0 0 0 15 26z" fill="#fff"/><g stroke="#fff" stroke-width="3" stroke-linecap="round" opacity=".8"><path d="M10 33h28M14 39h22"/></g></svg>'
+};
+/* Langit pada kartu jam: kunci tampilan dari jenis cuaca + siang/malam */
+function skyKey(){
+  const w=S.cuaca; if(!w || typeof w.suhu!=="number" || !((Date.now()-new Date(w.diperbarui))/3600e3 < 12)) return null;
+  const h=+timeStr().slice(0,2), siang = typeof w.siang==="boolean" ? w.siang : (h>=7 && h<19);
+  const j = ["sun","moon"].includes(w.jenis) ? (siang?"sun":"clear") : (WX_ICON[w.jenis]?w.jenis:"cloud");
+  return j==="sun" ? "sun-d" : j==="clear" ? "clear-n" : `${j}-${siang?"d":"n"}`;
+}
+function rnd(seed){ let x=seed; return ()=>{ x=(x*9301+49297)%233280; return x/233280; }; }
+function skyLayer(key){
+  if(!key) return "";
+  const r=rnd(7), parts=[];
+  const [j,dn]=key.split("-");
+  if(j==="sun") parts.push('<i class="sunglow"></i>');
+  if(j==="clear"){ parts.push('<i class="moonglow"></i>'); for(let i=0;i<26;i++) parts.push(`<i class="star" style="left:${(r()*100).toFixed(1)}%;top:${(r()*70).toFixed(1)}%;animation-delay:${(r()*3).toFixed(2)}s;opacity:${(.3+r()*.7).toFixed(2)}"></i>`); }
+  const nCloud = {sun:1,clear:0,cloud:5,rain:4,storm:5,fog:2}[j]||0, cOp = dn==="n" ? .16 : .42;
+  for(let i=0;i<nCloud;i++){ const w=120+r()*160; parts.push(`<i class="cl" style="width:${w|0}px;height:${(w*.45)|0}px;left:${(r()*90-20).toFixed(1)}%;top:${(r()*45-10).toFixed(1)}%;opacity:${cOp};animation-duration:${(30+r()*30)|0}s"></i>`); }
+  if(j==="rain"||j==="storm"){ const n=j==="storm"?60:42; for(let i=0;i<n;i++) parts.push(`<i class="drop" style="left:${(r()*110).toFixed(1)}%;animation-delay:${(-r()*1.2).toFixed(2)}s;animation-duration:${(.65+r()*.5).toFixed(2)}s;opacity:${(.35+r()*.6).toFixed(2)}"></i>`); }
+  if(j==="storm") parts.push('<i class="flash"></i>');
+  if(j==="fog") for(let i=0;i<4;i++) parts.push(`<i class="mist" style="top:${20+i*22}%;animation-duration:${(20+r()*20)|0}s"></i>`);
+  return `<div class="sky" aria-hidden="true">${parts.join("")}</div>`;
+}
+function weatherInline(){
+  const key=skyKey(); if(!key) return "";
+  const w=S.cuaca, ic = key.startsWith("clear") ? WX_ICON.moon : key.startsWith("sun") ? WX_ICON.sun : (WX_ICON[key.split("-")[0]]||WX_ICON.cloud);
+  const jam=new Date(w.diperbarui).toLocaleTimeString("en-GB",{timeZone:TZ,hour:"2-digit",minute:"2-digit"});
+  return `<div class="wxi" aria-label="Cuaca Kuala Lumpur ${Math.round(w.suhu)} derajat, ${esc(w.kondisi)}">
+    <div class="tmp">${Math.round(w.suhu)}°</div>
+    <div class="cnd">${ic}<span>${esc(w.kondisi)}</span></div>
+    ${typeof w.tinggi==="number"?`<div class="hl">T:${Math.round(w.tinggi)}°  R:${Math.round(w.rendah)}°${typeof w.hujan==="number"?` · ☂${w.hujan}%`:''}</div>`:''}
+    <div class="src">Kuala Lumpur</div>
+  </div>`;
+}
+
+/* ===================== Status helpers ===================== */
+function statusMasuk(jam, j){
+  let m=toMin(jam.slice(0,5)); const start=toMin(j.mulai);
+  if (j.lintas && m < 12*60 && start >= 12*60) m += 1440;          // lewat tengah malam pada shift malam
+  return m <= start + Number(S.cfg.toleransi||0) ? "Tepat waktu" : "Terlambat";
+}
+/* Batas pulang: tanggal mulai + jam selesai (+1 hari untuk shift lintas hari) */
+function statusPulang(now, j, startKey){
+  let end = new Date(`${startKey||dateKey(now)}T${j.selesai}:00+08:00`);
+  if (j.lintas && startKey) end = new Date(end.getTime()+86400000);
+  return now < end ? "Pulang cepat" : "Sesuai jadwal";
+}
+/* Catatan yang sedang berjalan: shift malam kemarin yang belum ditutup menang atas hari ini yang masih kosong */
+function activeRec(){
+  const y=S.yday, t=S.today;
+  if (!(t?.masuk||t?.pulang) && y?.masuk && !y.pulang && y.jadwal?.lintas) return { rec:y, key:y.tanggal, kemarin:true };
+  return { rec:t, key:S.dayKey, kemarin:false };
+}
+function pillFor(rec){
+  if (!rec || (!rec.masuk && !rec.pulang)) return '<span class="pill p-mute">Belum absen</span>';
+  if (!rec.masuk) return '<span class="pill p-bad">Tanpa absen masuk</span>';
+  const late = rec.status === "Terlambat";
+  let h = `<span class="pill ${late?'p-warn':'p-ok'}">${esc(rec.status)}</span>`;
+  if (rec.masuk.dalamRadius === false) h += ' <span class="pill p-bad">Luar premis</span>';
+  return h;
+}
+
+/* ===================== Render ===================== */
+function render(){
+  const root = $("#root");
+  if (!S.me) { if (S.booted===false) { root.innerHTML = `<div class="login"><img class="logo-lg" src="${LOGO}" alt=""><p class="muted" style="text-align:center">Memuat…</p></div>`; removeNav(); return; }
+    const keep={u:$("#lu")?.value||"",p:$("#lp")?.value||""}; root.innerHTML = viewLogin(); if($("#lu")){ $("#lu").value=keep.u; $("#lp").value=keep.p; } $("#lform")?.addEventListener("submit", login); $("#suForm")?.addEventListener("submit", setupFirstAdmin); $("#pwt")?.addEventListener("click", ()=>{const i=$("#lp");i.type=i.type==="password"?"text":"password";}); removeNav(); return; }
+  const focusId = document.activeElement?.id;
+  const views = { home:viewHome, riwayat:viewRiwayat, profil:viewProfil, rekap:viewRekap, staff:viewStaff, atur:viewAtur };
+  root.innerHTML = topbar() + (views[S.tab]||viewHome)();
+  bindView();
+  renderNav();
+  if (focusId && $("#"+focusId)) $("#"+focusId).focus();
+}
+
+function topbar(){
+  return `<div class="topbar"><div class="brand"><img class="emblem" src="${LOGO}" alt="Logo KBRI Kuala Lumpur"><div><b>E-Absensi</b><span>${esc(S.cfg.nama)}</span></div></div>
+  <button class="avatar" data-go="${S.me.role==='admin'?'atur':'profil'}" aria-label="Profil">${esc(initials(S.me.nama))}</button></div>`;
+}
+
+function viewLogin(){
+  const warn = S.booted==="noconfig" ? `<div class="banner">Aplikasi belum terhubung ke Firebase. Isi file config.js sesuai panduan README.</div>`
+    : S.loginMsg ? `<div class="banner">${esc(S.loginMsg)}</div>` : "";
+  if (S.setupNeeded && S.auth) return viewSetup();
+  return `<div class="login">
+    <img class="logo-lg" src="${LOGO}" alt="Logo Kedutaan Besar Republik Indonesia Kuala Lumpur">
+    <div class="stack center" style="gap:6px"><span class="eyebrow" style="display:flex;flex-direction:column;gap:2px"><span>Kedutaan Besar Republik Indonesia</span><span>Kuala Lumpur</span></span><h1>Selamat datang di E-Absensi</h1><p class="muted">Masuk dengan akun staf untuk mencatat kehadiran hari ini.</p></div>
+    ${warn}
+    <form id="lform" class="card stack" autocomplete="on">
+      <label class="f">Username<input class="input" id="lu" autocomplete="username" autocapitalize="none" placeholder="contoh: ega.lukita"></label>
+      <label class="f">Password<div class="pw"><input class="input" id="lp" type="password" autocomplete="current-password" placeholder="••••••••"><button type="button" id="pwt" aria-label="Tampilkan password">${I.eye}</button></div></label>
+      <p id="lerr" class="small" style="color:var(--bad);font-weight:600" hidden></p>
+      <button class="cta" id="lbtn" type="submit">Masuk</button>
+    </form>
+    <p class="small muted" style="text-align:center">Lupa password? Minta admin kepegawaian untuk mengatur ulang.</p>
+    ${installHint()}
+  </div>`;
+}
+
+function viewSetup(){
+  return `<div class="login">
+    <img class="logo-lg" src="${LOGO}" alt="Logo Kedutaan Besar Republik Indonesia Kuala Lumpur">
+    <div class="stack center" style="gap:6px"><span class="eyebrow">Penyiapan pertama</span><h1>Buat akun admin</h1><p class="muted">Langkah ini hanya muncul sekali. Akun admin dipakai untuk mendaftarkan staf dan melihat rekap.</p></div>
+    <form id="suForm" class="card stack" autocomplete="off">
+      <label class="f">Nama admin<input class="input" id="suNama" placeholder="contoh: Admin Kepegawaian"></label>
+      <label class="f">Username admin<input class="input mono" id="suUser" autocapitalize="none" placeholder="admin"></label>
+      <label class="f">Password (min. 8 karakter)<input class="input" id="suPass" type="password" autocomplete="new-password"></label>
+      <p id="suErr" class="small" style="color:var(--bad);font-weight:600" hidden></p>
+      <button class="cta" id="suBtn" type="submit">Buat akun admin</button>
+    </form>
+  </div>`;
+}
+
+function viewHome(){
+  const A = activeRec(), t = A.rec, now = timeStr(), sec = isSecurity(S.me.fungsi);
+  const doneIn = !!t?.masuk, doneOut = !!t?.pulang;
+  let cta;
+  if (!doneIn && !doneOut) cta = `<button class="cta" id="doIn">${I.in} Absen Masuk</button><button class="cta sec" id="doOut">${I.out} Lupa absen masuk? Absen Pulang</button>`;
+  else if (doneIn && !doneOut && A.kemarin) cta = `<button class="cta out" id="doOut">${I.out} Absen Pulang Shift Malam</button><button class="cta sec" id="doIn">${I.in} Mulai absen masuk baru</button>`;
+  else if (doneIn && !doneOut) cta = `<button class="cta out" id="doOut">${I.out} Absen Pulang</button>`;
+  else if (!doneIn && doneOut) cta = `<button class="cta" disabled>Absen pulang tercatat tanpa absen masuk</button>`;
+  else cta = `<button class="cta" disabled>${I.check.replace('width="40" height="40"','width="22" height="22"')} Absensi hari ini lengkap</button>`;
+  const durBox = doneIn && doneOut
+    ? `<div class="dur"><div class="row" style="gap:10px">${markFor(t)}<div><span class="eyebrow">Total jam kerja</span><p class="small muted">Masuk dan pulang lengkap</p></div></div><b>${fmtDur(durMin(t.masuk.ts,t.pulang.ts))}</b></div>`
+    : doneIn ? `<div class="dur"><div class="row" style="gap:10px">${markFor(t)}<div><span class="eyebrow">Sedang bekerja</span><p class="small muted">Belum absen pulang</p></div></div><b id="durLive">${fmtDur(durMin(t.masuk.ts,new Date().toISOString()))}</b></div>`
+    : doneOut ? `<div class="dur"><div class="row" style="gap:10px">${markFor(t)}<div><span class="eyebrow">Jam kerja</span><p class="small muted">Tidak ada absen masuk</p></div></div><b class="muted">—</b></div>` : "";
+  const premisList = S.cfg.premis.map(p=>`<span class="premis">${I.bldg}${esc(p.nama)}</span>`).join(" ");
+  const tilePremis = x => x ? `<span class="premis" style="${x.dalamRadius===false?'background:var(--bad-soft);color:var(--bad)':''}">${I.bldg}${esc(premisName(x))}</span>` : '';
+  return `
+  <section class="hero${skyKey()?` sky-${skyKey()}`:''}">
+    ${skyLayer(skyKey())}
+    <div class="hero-top"><div>
+      <span class="eyebrow">Halo, ${esc(S.me.nama.split(" ")[0])}</span>
+      <div class="clock" id="clock">${now.slice(0,5)}<small>:${now.slice(6)}</small></div>
+      <div class="date">${longDate()}</div>
+    </div>${weatherInline()}</div>
+    <div class="shift">${t?.jadwal ? `<span>${esc(jadwalText(t.jadwal))}${A.kemarin?' (mulai kemarin)':''}</span>`
+      : sec ? [...SHIFT_IDS,"sikl"].map(id=>`<span>${esc(jadwalText(jadwalById(id)))}</span>`).join("")
+      : `<span>${esc(jadwalText(jadwalById("umum")))}</span>`}<span>Toleransi ${esc(S.cfg.toleransi)} mnt</span></div>
+  </section>
+  <div class="tiles">
+    <div class="tile"><span class="eyebrow">Masuk</span><span class="t ${t?.masuk?'':'empty'}">${t?.masuk? esc(t.masuk.jam.slice(0,5)) : '--:--'}</span>${t?.masuk? pillFor(t)+tilePremis(t.masuk) : '<span class="small muted">Belum tercatat</span>'}</div>
+    <div class="tile"><span class="eyebrow">Pulang</span><span class="t ${t?.pulang?'':'empty'}">${t?.pulang? esc(t.pulang.jam.slice(0,5)) : '--:--'}</span>${t?.pulang? (t.statusPulang==='Pulang cepat'?'<span class="pill p-warn">Pulang cepat</span>':'<span class="pill p-ok">Sesuai jadwal</span>')+tilePremis(t.pulang) : '<span class="small muted">Belum tercatat</span>'}</div>
+  </div>
+  ${durBox}
+  ${cta}
+  <div class="card flat stack" style="gap:8px">
+    <span class="eyebrow">Premis kerja terdaftar</span>
+    <div class="row wrap" style="gap:6px">${premisList}</div>
+    <p class="small muted">Lokasi GPS saat absen menentukan premis secara otomatis.</p>
+  </div>
+  <div class="card stack"><div class="row between"><h3 style="font-size:16px">Minggu ini</h3><button class="btn ghost small" data-go="riwayat">Lihat semua</button></div>${histList(S.history.slice(0,5))}</div>`;
+}
+
+function histList(arr){
+  if (!arr.length) return `<div class="empty">${I.hist}<p>Riwayat kehadiranmu akan muncul di sini setelah absen pertama.</p></div>`;
+  return `<div class="list">${arr.map(r=>`<div class="item">${markFor(r)}<div class="grow"><div class="name">${shortDate(r.tanggal)}</div><div class="sub">${esc(premisName(r.masuk||r.pulang))}${r.jadwal?` · ${esc(r.jadwal.nama)}`:''}</div></div>
+    <div class="times">${esc(r.masuk?.jam?.slice(0,5)||'--:--')} <span class="muted">→</span> ${esc(r.pulang?.jam?.slice(0,5)||'--:--')}<span class="dur-s">${esc(durText(r))}</span></div></div>`).join("")}</div>`;
+}
+
+function viewRiwayat(){
+  const h = S.history, late = h.filter(r=>r.status==="Terlambat").length, ok = h.filter(lengkap);
+  const totalMin = ok.reduce((a,r)=>a+durMin(r.masuk.ts,r.pulang.ts),0);
+  return `<h2 style="font-size:24px">Riwayat Kehadiran</h2>
+  <div class="stats">
+    <div class="stat" style="color:var(--ok)"><b>${ok.length}</b><span>Lengkap</span></div>
+    <div class="stat" style="color:var(--bad)"><b>${h.length-ok.length}</b><span>Tidak lengkap</span></div>
+    <div class="stat" style="color:var(--warn)"><b>${late}</b><span>Terlambat</span></div>
+    <div class="stat" style="color:var(--primary)"><b>${ok.length?Math.round(totalMin/ok.length/6)/10:0}</b><span>Rata² jam</span></div>
+  </div>
+  <div class="card">${histList(h)}</div>
+  <p class="small muted"><span class="chk ok" style="width:18px;height:18px;vertical-align:-4px">${I.tick}</span> masuk & pulang lengkap &nbsp; <span class="chk no" style="width:18px;height:18px;vertical-align:-4px">${I.cross}</span> hanya masuk atau hanya pulang. Menampilkan 30 catatan terakhir.</p>`;
+}
+
+function viewProfil(){
+  return `<h2 style="font-size:24px">Profil</h2>
+  <div class="card row"><div class="ini" style="width:56px;height:56px;border-radius:18px;font-size:18px">${esc(initials(S.me.nama))}</div>
+    <div style="min-width:0"><b style="font-size:17px">${esc(S.me.nama)}</b><p class="small muted">${esc(S.me.fungsi)}</p><p class="small muted mono">@${esc(S.me.username)}</p></div></div>
+  ${faceCard()}
+  ${installHint()}
+  ${pwCard()}
+  <button class="btn danger block" id="logout">Keluar</button>`;
+}
+function faceCard(){
+  const w=S.wajah;
+  return `<div class="card stack"><div class="row between"><h3 style="font-size:16px">Data wajah</h3>${w?'<span class="pill p-ok">Terdaftar</span>':'<span class="pill p-bad">Belum terdaftar</span>'}</div>
+    <p class="small muted">${w?`Didaftarkan ${esc(new Date(w.dibuat).toLocaleDateString("id-ID",{timeZone:TZ,day:"numeric",month:"long",year:"numeric"}))}. Untuk mengulang pendaftaran, minta admin menghapus data wajahmu.`:'Daftarkan wajahmu sekali sebelum absen. Wajah dicocokkan setiap kali absen masuk atau pulang.'}</p>
+    ${w?'':'<button class="btn primary" id="enrollBtn">Daftarkan wajah</button>'}</div>`;
+}
+
+function pwCard(){
+  return `<form class="card stack" id="pwForm"><h3 style="font-size:16px">Ganti password</h3>
+    <label class="f">Password lama<input class="input" id="pwOld" type="password" autocomplete="current-password"></label>
+    <label class="f">Password baru (min. 6 karakter)<input class="input" id="pwNew" type="password" autocomplete="new-password"></label>
+    <button class="btn primary" type="submit">Simpan password</button></form>`;
+}
+
+/* ---------- Admin ---------- */
+function viewRekap(){
+  const active = S.staff.filter(s=>s.role!=="admin" && s.aktif!==false);
+  const byUser = Object.fromEntries(S.rekap.map(r=>[r.uid,r]));
+  const hadir = S.rekap.length, late = S.rekap.filter(r=>r.status==="Terlambat").length, tdk = S.rekap.filter(r=>!lengkap(r)).length;
+  const belum = active.filter(s=>!byUser[s.uid]);
+  const rows = [...S.rekap].sort((a,b)=>((a.masuk||a.pulang)?.jam||"").localeCompare((b.masuk||b.pulang)?.jam||""));
+  const perPremis = S.cfg.premis.map(p=>({p, n:S.rekap.filter(r=>(r.masuk||r.pulang)?.premisId===p.id || (!(r.masuk||r.pulang)?.premisId && p.id==="kbri" && (r.masuk||r.pulang)?.dalamRadius!==false)).length}));
+  const luar = S.rekap.filter(r=>(r.masuk||r.pulang)?.dalamRadius===false).length;
+  return `<div class="row between wrap"><div><span class="eyebrow">Rekap harian</span><h2 style="font-size:24px">${S.rekapDate===dateKey()?'Hari ini':shortDate(S.rekapDate)}</h2></div>
+    <input type="date" class="input" id="rDate" value="${esc(S.rekapDate)}" style="width:auto"></div>
+  <div class="stats">
+    <div class="stat" style="color:var(--ok)"><b>${hadir}</b><span>Hadir</span></div>
+    <div class="stat" style="color:var(--warn)"><b>${late}</b><span>Terlambat</span></div>
+    <div class="stat" style="color:var(--bad)"><b>${tdk}</b><span>Tidak lengkap</span></div>
+    <div class="stat" style="color:var(--muted)"><b>${belum.length}</b><span>Belum absen</span></div>
+  </div>
+  <div class="card stack" style="gap:8px"><span class="eyebrow">Kehadiran per premis</span>
+    ${perPremis.map(({p,n})=>`<div class="row between"><span class="premis">${I.bldg}${esc(p.nama)}</span><b class="mono">${n}</b></div>`).join("")}
+    ${luar?`<div class="row between"><span class="premis" style="background:var(--bad-soft);color:var(--bad)">${I.bldg}Di luar premis</span><b class="mono">${luar}</b></div>`:''}
+  </div>
+  <div class="card stack"><h3 style="font-size:16px">Sudah absen</h3>
+    ${rows.length ? `<div class="list">${rows.map(r=>`<div class="item">${markFor(r)}<div class="grow"><div class="name">${esc(r.nama)}</div><div class="sub">${esc(r.fungsi)}</div><div class="sub">${esc(premisName(r.masuk||r.pulang))} · ${esc(durText(r))}</div>${r.jadwal?`<div class="sub">${esc(jadwalText(r.jadwal))}</div>`:''}<div style="margin-top:4px">${pillFor(r)}${(r.masuk||r.pulang)?.keterangan?` <span class="small muted">· ${esc((r.masuk||r.pulang).keterangan)}</span>`:''}</div></div>
+      <div class="times">${esc(r.masuk?.jam?.slice(0,5)||'--:--')}<br><span class="muted">${esc(r.pulang?.jam?.slice(0,5)||'--:--')}</span></div></div>`).join("")}</div>`
+      : `<div class="empty">${I.chart}<p>Belum ada staf yang absen pada tanggal ini.</p></div>`}
+  </div>
+  ${belum.length?`<div class="card stack"><h3 style="font-size:16px">Belum absen</h3><div class="list">${belum.map(s=>`<div class="item"><div class="ini" style="background:var(--surface-2);color:var(--muted)">${esc(initials(s.nama))}</div><div class="grow"><div class="name">${esc(s.nama)}</div><div class="sub">${esc(s.fungsi)}</div></div></div>`).join("")}</div></div>`:''}
+  ${exportCard()}`;
+}
+
+function exportCard(){
+  const d = S.rekapDate;
+  const ef = S.exFrom||d, et = S.exTo||d;
+  return `<div class="card stack"><div class="row" style="gap:10px"><span style="color:var(--ok)">${I.sheet}</span><h3 style="font-size:16px">Ekspor ke Google Sheets</h3></div>
+    <div class="grid2"><label class="f">Dari<input type="date" class="input" id="exFrom" value="${esc(ef)}"></label><label class="f">Sampai<input type="date" class="input" id="exTo" value="${esc(et)}"></label></div>
+    <button class="btn primary block" id="exCopy">${I.copy} Salin data untuk Google Sheets</button>
+    <button class="btn ghost block" id="exCsv">${I.dl} Unduh file CSV</button>
+    <p class="small muted">Cara cepat: tekan <b>Salin</b>, buka <a href="https://sheets.new" target="_blank" rel="noopener" style="color:var(--primary);font-weight:700">sheets.new</a>, klik sel A1, lalu tempel. File CSV juga bisa diimpor lewat File → Impor di Google Sheets.</p>
+  </div>`;
+}
+
+function viewStaff(){
+  const list = S.staff;
+  return `<div class="row between"><div><span class="eyebrow">${list.filter(s=>s.role!=='admin').length} staf terdaftar</span><h2 style="font-size:24px">Data Staf</h2></div><button class="btn primary" id="addStaff">+ Tambah</button></div>
+  <div class="card">${list.length?`<div class="list">${list.map(s=>`<div class="item"><div class="ini" ${s.aktif===false?'style="background:var(--surface-2);color:var(--muted)"':''}>${esc(initials(s.nama))}</div>
+    <div class="grow"><div class="name">${esc(s.nama)}</div><div class="sub">${esc(s.fungsi)} · @${esc(s.username)}</div>
+    <div style="margin-top:4px">${s.role==='admin'?'<span class="pill p-info">Admin</span>':''} ${s.aktif===false?'<span class="pill p-mute">Nonaktif</span>':''}</div></div>
+    <button class="btn ghost" data-edit="${esc(s.uid)}">Ubah</button></div>`).join("")}</div>`
+    : `<div class="empty">${I.team}<p>Belum ada staf. Tekan <b>Tambah</b> untuk mendaftarkan staf pertama.</p></div>`}</div>`;
+}
+
+function viewAtur(){
+  const c = S.cfg;
+  return `<h2 style="font-size:24px">Pengaturan</h2>
+  <form class="card stack" id="cfgForm"><h3 style="font-size:16px">Jadwal kerja</h3>
+    ${Object.keys(JADWAL_INFO).map(id=>`<div class="card flat stack" style="padding:14px;gap:8px">
+      <div><b>${esc(JADWAL_INFO[id].nama)}</b><p class="small muted">${esc(JADWAL_INFO[id].ket)}</p></div>
+      <div class="grid2"><label class="f">Mulai (24 jam)<input class="input mono" id="j_${id}_m" inputmode="numeric" maxlength="5" placeholder="08:00" value="${esc(c.jadwal[id].mulai)}"></label><label class="f">Selesai (24 jam)<input class="input mono" id="j_${id}_s" inputmode="numeric" maxlength="5" placeholder="17:00" value="${esc(c.jadwal[id].selesai)}"></label></div>
+    </div>`).join("")}
+    <label class="f">Toleransi terlambat (menit)<input class="input mono" id="cTol" type="number" min="0" value="${esc(c.toleransi)}"></label>
+    <h3 style="font-size:16px;margin-top:8px">Premis kerja</h3>
+    <p class="small muted">Saat absen, aplikasi memilih premis terdekat yang radiusnya mencakup posisi GPS staf. Berdirilah di premis, lalu tekan "Pakai lokasi saya" untuk titik yang paling akurat.</p>
+    ${c.premis.map((p,i)=>`<div class="card flat stack" style="padding:14px;gap:10px">
+      <label class="f">Nama premis<input class="input" id="pN${i}" value="${esc(p.nama)}"></label>
+      <div class="grid2"><label class="f">Latitude<input class="input mono" id="pLa${i}" inputmode="decimal" value="${esc(p.lat)}"></label><label class="f">Longitude<input class="input mono" id="pLo${i}" inputmode="decimal" value="${esc(p.lng)}"></label></div>
+      <div class="grid2" style="align-items:end"><label class="f">Radius (meter)<input class="input mono" id="pR${i}" type="number" min="20" value="${esc(p.radius)}"></label><button type="button" class="btn ghost" data-here="${i}">${I.pin.replace('width="28" height="28"','width="18" height="18"')} Pakai lokasi saya</button></div>
+    </div>`).join("")}
+    <button class="btn primary" type="submit">Simpan pengaturan</button>
+  </form>
+  ${pwCard()}
+  <button class="btn danger block" id="logout">Keluar</button>`;
+}
+
+/* ---------- Nav ---------- */
+function removeNav(){ $("#nav")?.remove(); }
+function renderNav(){
+  removeNav();
+  const items = S.me.role==="admin" ? [["rekap","Rekap",I.chart],["staff","Staf",I.team],["atur","Pengaturan",I.gear]] : [["home","Beranda",I.home],["riwayat","Riwayat",I.hist],["profil","Profil",I.user]];
+  const n = document.createElement("nav"); n.className="nav"; n.id="nav";
+  n.innerHTML = items.map(([k,l,ic])=>`<button data-go="${k}" class="${S.tab===k?'on':''}" aria-label="${l}">${ic}<span>${l}</span></button>`).join("");
+  document.body.appendChild(n);
+  n.querySelectorAll("[data-go]").forEach(b=>b.onclick=()=>{S.tab=b.dataset.go;render();window.scrollTo(0,0);});
+}
+
+function bindView(){
+  document.querySelectorAll("#root [data-go]").forEach(b=>b.onclick=()=>{S.tab=b.dataset.go;render();window.scrollTo(0,0);});
+  $("#logout") && ($("#logout").onclick = logout);
+  $("#doIn") && ($("#doIn").onclick = ()=>openFlow("masuk"));
+  $("#doOut") && ($("#doOut").onclick = ()=>openFlow("pulang"));
+  $("#pwForm") && ($("#pwForm").onsubmit = changePw);
+  $("#enrollBtn") && ($("#enrollBtn").onclick = ()=>openEnroll());
+  $("#rDate") && ($("#rDate").onchange = e=>{ if(e.target.value){S.rekapDate=e.target.value; S.exFrom=S.exTo=null; subRekap(); render();} });
+  $("#exFrom") && ($("#exFrom").onchange = e=>{ S.exFrom=e.target.value; });
+  $("#exTo") && ($("#exTo").onchange = e=>{ S.exTo=e.target.value; });
+  $("#exCopy") && ($("#exCopy").onclick = ()=>doExport("copy"));
+  $("#exCsv") && ($("#exCsv").onclick = ()=>doExport("csv"));
+  $("#addStaff") && ($("#addStaff").onclick = ()=>openStaffForm(null));
+  document.querySelectorAll("[data-edit]").forEach(b=>b.onclick=()=>openStaffForm(S.staff.find(s=>s.uid===b.dataset.edit)));
+  $("#cfgForm") && ($("#cfgForm").onsubmit = saveCfg);
+  document.querySelectorAll("[data-here]").forEach(b=>b.onclick=()=>{ const i=b.dataset.here; getPos().then(p=>{ $("#pLa"+i).value=p.coords.latitude.toFixed(6); $("#pLo"+i).value=p.coords.longitude.toFixed(6); toast("Lokasi diisi. Tekan Simpan."); }).catch(()=>toast("Lokasi tidak bisa dibaca di tampilan ini.")); });
+}
+
+/* ===================== Actions ===================== */
+async function changePw(e){
+  e.preventDefault();
+  const o=$("#pwOld").value, n=$("#pwNew").value;
+  if (n.length<6) return toast("Password baru minimal 6 karakter.");
+  try {
+    const u=S.auth.currentUser; const cred=firebase.auth.EmailAuthProvider.credential(u.email, o);
+    await u.reauthenticateWithCredential(cred); await u.updatePassword(n);
+    $("#pwOld").value=""; $("#pwNew").value=""; toast("Password diperbarui.");
+  } catch(ex){ toast(/wrong-password|invalid-credential/.test(ex?.code||"") ? "Password lama salah." : "Gagal menyimpan. Coba lagi."); }
+}
+
+async function saveCfg(e){
+  e.preventDefault();
+  const tol=parseInt($("#cTol").value,10), premis=[];
+  for (let i=0;i<S.cfg.premis.length;i++){
+    const lat=parseFloat($("#pLa"+i).value), lng=parseFloat($("#pLo"+i).value), rad=parseInt($("#pR"+i).value,10), nama=$("#pN"+i).value.trim();
+    if(!nama) return toast("Nama premis wajib diisi.");
+    if(!isFinite(lat)||!isFinite(lng)||Math.abs(lat)>90||Math.abs(lng)>180) return toast(`Koordinat ${nama} tidak valid.`);
+    if(!(rad>=20)) return toast("Radius minimal 20 meter.");
+    premis.push({...S.cfg.premis[i], nama, lat, lng, radius:rad});
+  }
+  const jadwal={};
+  for (const id of Object.keys(JADWAL_INFO)){ const fix=v=>{ const t=v.trim().replace(".",":"); const m=t.match(/^(\d{1,2}):?(\d{2})$/); if(!m) return ""; const h=+m[1], mi=+m[2]; return h<24&&mi<60 ? String(h).padStart(2,"0")+":"+m[2] : ""; };
+    const m=fix($(`#j_${id}_m`).value), x=fix($(`#j_${id}_s`).value); if(!m||!x) return toast(`Jam ${JADWAL_INFO[id].nama} harus format 24 jam, contoh 08:00.`); if(m===x) return toast(`Jam mulai dan selesai ${JADWAL_INFO[id].nama} tidak boleh sama.`); jadwal[id]={mulai:m,selesai:x}; }
+  const cfg={nama:"KBRI Kuala Lumpur", premis, jadwal, toleransi:isFinite(tol)?tol:0};
+  try { await S.db.doc("config/kantor").set(cfg); S.cfg=cfg; toast("Pengaturan disimpan."); render(); } catch(ex){ toast("Gagal menyimpan pengaturan."); }
+}
+
+/* ---------- Staff form sheet ---------- */
+function openStaffForm(s){
+  const isNew=!s;
+  openSheet(`<h2 style="font-size:22px">${isNew?'Tambah staf':'Ubah data staf'}</h2>
+    <form class="stack" id="sf" style="margin-top:14px">
+      <label class="f">Nama lengkap<input class="input" id="sNama" value="${esc(s?.nama||'')}" required></label>
+      <label class="f">Fungsi / bagian<select class="input" id="sFungsi" required><option value="">Pilih fungsi…</option>${[...FUNGSI, ...(s?.fungsi && !FUNGSI.includes(s.fungsi) ? [s.fungsi] : [])].map(f=>`<option ${s?.fungsi===f?'selected':''}>${esc(f)}</option>`).join("")}</select></label>
+      <p class="small muted" id="sJadwal"></p>
+      <label class="f">Username<input class="input mono" id="sUser" autocapitalize="none" value="${esc(s?.username||'')}" ${isNew?'':'disabled'} placeholder="nama.belakang"></label>
+      ${isNew?`<label class="f">Password awal (min. 6 karakter)<input class="input" id="sPass" type="text" autocomplete="off"></label>`:''}
+      <div class="grid2">
+        <label class="f">Peran<select class="input" id="sRole"><option value="staff" ${s?.role!=='admin'?'selected':''}>Staf</option><option value="admin" ${s?.role==='admin'?'selected':''}>Admin</option></select></label>
+        <label class="f">Status<select class="input" id="sAktif"><option value="1" ${s?.aktif!==false?'selected':''}>Aktif</option><option value="0" ${s?.aktif===false?'selected':''}>Nonaktif</option></select></label>
+      </div>
+      <p id="sErr" class="small" style="color:var(--bad);font-weight:600" hidden></p>
+      <button class="cta" type="submit">${isNew?'Simpan staf':'Simpan perubahan'}</button>
+      ${isNew?'':`<button type="button" class="btn ghost block" id="sFace">Hapus data wajah (daftar ulang)</button><div id="delZone"><button type="button" class="btn danger block" id="sDel">Hapus staf</button></div>
+      <p class="small muted">Lupa password: hapus akun ini di Firebase Console → Authentication, lalu tambahkan lagi dengan username yang sama.</p>`}
+    </form>`);
+  const showJ=()=>{ const f=$("#sFungsi").value; $("#sJadwal").textContent = !f ? "" : isSecurity(f) ? `Jadwal: shift dipilih saat absen (Pagi / Pagi + Lembur / Malam). Saat jaga di SIKL otomatis ${jadwalById("sikl").mulai}–${jadwalById("sikl").selesai}.` : `Jadwal: ${jadwalText(jadwalById("umum"))}.`; };
+  $("#sFungsi").onchange=showJ; showJ();
+  $("#sf").onsubmit = async e => {
+    e.preventDefault();
+    const err=$("#sErr"); err.hidden=true;
+    const nama=$("#sNama").value.trim(), fungsi=$("#sFungsi").value.trim(), user=(isNew?$("#sUser").value:s.username).trim().toLowerCase(), pass=isNew?$("#sPass").value:"";
+    const fail=m=>{err.textContent=m;err.hidden=false;};
+    if(!nama||!fungsi) return fail("Nama dan fungsi wajib diisi.");
+    if(!/^[a-z0-9._-]{3,40}$/.test(user)) return fail("Username 3–40 karakter: huruf kecil, angka, titik, strip.");
+    if(isNew && pass.length<6) return fail("Password awal minimal 6 karakter.");
+    if(!isNew && s.uid===S.me.uid && ($("#sRole").value!=="admin"||$("#sAktif").value==="0")) return fail("Kamu tidak bisa menurunkan atau menonaktifkan akunmu sendiri.");
+    try {
+      const body={nama,fungsi,username:user,role:$("#sRole").value,aktif:$("#sAktif").value==="1"};
+      if(isNew){
+        const sec = firebase.apps.find(a=>a.name==="pendaftar") || firebase.initializeApp(FIREBASE_CONFIG,"pendaftar");
+        const cred = await sec.auth().createUserWithEmailAndPassword(emailOf(user), pass);
+        const uid = cred.user.uid; await sec.auth().signOut();
+        await S.db.doc("staff/"+uid).set({ ...body, uid, dibuat:new Date().toISOString() });
+      } else await S.db.doc("staff/"+s.uid).update(body);
+      closeSheet(); toast(isNew?"Staf ditambahkan.":"Data staf diperbarui.");
+    } catch(ex){ const c=ex?.code||""; fail(/email-already-in-use/.test(c) ? "Username sudah dipakai." : /weak-password/.test(c) ? "Password terlalu lemah." : "Gagal menyimpan. Periksa koneksi lalu coba lagi."); }
+  };
+  $("#sFace") && ($("#sFace").onclick = async ()=>{
+    try{ await S.db.doc("wajah/"+s.uid).delete(); toast("Data wajah dihapus. Staf bisa mendaftar ulang dari Profil."); }catch(e){ toast("Gagal menghapus data wajah."); }
+  });
+  $("#sDel") && ($("#sDel").onclick = ()=>{
+    if(s.uid===S.me.uid) return toast("Akun yang sedang dipakai tidak bisa dihapus.");
+    $("#delZone").innerHTML=`<div class="card flat stack"><p class="small"><b>Hapus ${esc(s.nama)}?</b> Riwayat absensinya tetap tersimpan.</p><div class="grid2"><button type="button" class="btn ghost" id="dNo">Batal</button><button type="button" class="btn danger" id="dYes">Ya, hapus</button></div></div>`;
+    $("#dNo").onclick=()=>{ closeSheet(); openStaffForm(s); };
+    $("#dYes").onclick=async()=>{ try{ await S.db.doc("staff/"+s.uid).delete(); closeSheet(); toast("Staf dihapus. Akun loginnya bisa dihapus juga di Firebase Console."); }catch(e){ toast("Gagal menghapus."); } };
+  });
+}
+
+/* ---------- Sheet ---------- */
+function openSheet(html){
+  const host=$("#sheetHost");
+  host.innerHTML=`<div class="scrim" id="scrim"><div class="sheet" role="dialog" aria-modal="true"><div class="grab"></div><div id="sheetBody">${html}</div></div></div>`;
+  $("#scrim").addEventListener("click",e=>{ if(e.target.id==="scrim") closeSheet(); });
+}
+function closeSheet(){ stopCam(); $("#sheetHost").innerHTML=""; }
+function stopCam(){ if(S.stream){ S.stream.getTracks().forEach(t=>t.stop()); S.stream=null; } }
+
+/* ===================== Alur absen: Lokasi → Wajah → Konfirmasi ===================== */
+const F = {};
+function getPos(){ return new Promise((res,rej)=>{ if(!navigator.geolocation) return rej(new Error("no-geo")); navigator.geolocation.getCurrentPosition(res,rej,{enableHighAccuracy:true,timeout:12000,maximumAge:0}); }); }
+
+function openFlow(jenis){
+  const A = activeRec();
+  // Absen pulang menutup catatan aktif (termasuk shift malam kemarin); absen masuk selalu untuk hari ini
+  const target = jenis==="pulang" && A.rec?.masuk && !A.rec.pulang ? { key:A.key, rec:A.rec } : { key:dateKey(), rec: jenis==="pulang" ? S.today : null };
+  Object.assign(F,{jenis,pos:null,face:null,ket:"",target,shift:null});
+  openSheet(""); stepLokasi();
+}
+function stepsBar(n){ return `<div class="steps">${[1,2,3].map(i=>`<i class="${i<=n?'on':''}"></i>`).join("")}</div>`; }
+function flowHead(n,title,sub){ return `${stepsBar(n)}<span class="eyebrow">Absen ${F.jenis} · langkah ${n} dari 3</span><h2 style="font-size:22px;margin-top:4px">${title}</h2><p class="muted small" style="margin-top:4px">${sub}</p>`; }
+
+function stepLokasi(){
+  $("#sheetBody").innerHTML = flowHead(1,"Memeriksa lokasi","Pastikan GPS ponsel aktif dan kamu berada di area kantor.") +
+   `<div class="mapbox" style="margin-top:16px"><div class="radar pulse">${I.pin}</div><div><b>Mencari posisi…</b><p class="small muted">Biasanya selesai dalam beberapa detik.</p></div></div>`;
+  getPos().then(p=>setPos(p.coords.latitude,p.coords.longitude,p.coords.accuracy,"gps")).catch(()=>{
+    $("#sheetBody").innerHTML = flowHead(1,"Lokasi tidak terbaca","Izin lokasi ditolak atau GPS tidak tersedia di tampilan ini.") +
+     `<div class="banner" style="margin-top:14px">Aktifkan izin lokasi lalu coba lagi. Untuk uji coba prototipe, kamu bisa memakai lokasi demo (tercatat sebagai demo).</div>
+      <div class="stack" style="margin-top:14px"><button class="btn primary block" id="gRetry">Coba lagi</button><button class="btn ghost block" id="gDemo">Pakai lokasi demo</button><button class="btn block" id="gCancel">Batal</button></div>`;
+    $("#gRetry").onclick=stepLokasi; $("#gCancel").onclick=closeSheet;
+    $("#gDemo").onclick=()=>{
+      $("#sheetBody").innerHTML = flowHead(1,"Pilih lokasi demo","Hanya untuk uji coba prototipe. Catatan absen akan ditandai sebagai demo.") +
+        `<div class="pchoice" style="margin-top:14px">${S.cfg.premis.map((p,i)=>`<button class="btn ghost block" data-demo="${i}">${I.bldg.replace('<svg ','<svg width="18" height="18" ')}${esc(p.nama)}</button>`).join("")}<button class="btn ghost block" data-demo="out">Di luar semua premis</button></div>`;
+      document.querySelectorAll("[data-demo]").forEach(b=>b.onclick=()=>{ const v=b.dataset.demo; if(v==="out") setPos(3.1390,101.6869,20,"demo"); else { const p=S.cfg.premis[+v]; setPos(p.lat+0.0002,p.lng-0.0002,15,"demo"); } });
+    };
+  });
+}
+function setPos(lat,lng,acc,mode){
+  const {premis, terdekat} = detectPremis(lat,lng), dalam = !!premis, ref = premis||terdekat;
+  F.pos={lat:+lat.toFixed(6),lng:+lng.toFixed(6),akurasi:Math.round(acc||0),jarak:Math.round(ref.jarak),dalamRadius:dalam,
+         premisId:dalam?premis.id:"", premisNama:dalam?premis.nama:"Di luar premis", terdekat:terdekat.nama, mode};
+  $("#sheetBody").innerHTML = flowHead(1, dalam?`Kamu di ${esc(premis.nama)}`:"Di luar premis kerja", dalam?"Premis terdeteksi otomatis dari GPS. Lanjutkan ke verifikasi wajah.":"Posisimu tidak berada di premis mana pun. Tulis keterangan, misalnya dinas luar.") +
+   `<div class="mapbox" style="margin-top:16px"><div class="radar" style="${dalam?'':'background:var(--bad-soft);color:var(--bad)'}">${I.pin}</div>
+    <div style="min-width:0"><span class="premis" style="${dalam?'':'background:var(--bad-soft);color:var(--bad)'}">${I.bldg}${esc(F.pos.premisNama)}</span>
+    <p class="small muted" style="margin-top:6px"><b class="mono" style="color:var(--fg)">${fmtDist(ref.jarak)}</b> dari ${esc(ref.nama)} · radius ${ref.radius} m</p>
+    <p class="small muted mono">${F.pos.lat}, ${F.pos.lng} · ±${F.pos.akurasi} m</p>${mode==='demo'?'<span class="pill p-info">Lokasi demo</span>':''}</div></div>
+    ${dalam?'':`<label class="f" style="margin-top:14px">Keterangan<input class="input" id="gKet" placeholder="contoh: Dinas luar ke Wisma Putra"></label>`}
+    <div class="stack" style="margin-top:16px"><button class="cta" id="gNext">Lanjut ke scan wajah</button><button class="btn block" id="gCancel">Batal</button></div>`;
+  $("#gCancel").onclick=closeSheet;
+  $("#gNext").onclick=()=>{ if(!dalam){ const k=$("#gKet").value.trim(); if(k.length<4) return toast("Tulis keterangan dulu."); F.ket=k; } else F.ket=""; stepWajah(); };
+}
+
+async function stepWajah(){
+  if (S.wajah === null) {
+    $("#sheetBody").innerHTML = flowHead(2,"Wajah belum terdaftar","Daftarkan wajahmu sekali, lalu lanjutkan absen.") +
+      `<div class="stack" style="margin-top:16px"><button class="cta" id="goEnroll">${I.face} Daftarkan wajah sekarang</button><button class="btn block" id="fCancel">Batal</button></div>`;
+    $("#goEnroll").onclick=()=>openEnroll(()=>{ openSheet(""); stepWajah(); }); $("#fCancel").onclick=closeSheet; return;
+  }
+  $("#sheetBody").innerHTML = flowHead(2,"Scan wajah","Posisikan wajah di dalam lingkaran dengan cahaya yang cukup.") +
+   `<div class="scanner" id="scan" style="margin-top:18px"><div class="ring spin"></div><span class="muted small">Membuka kamera…</span></div>
+    <div class="stack" id="faceAct" style="margin-top:16px"></div>`;
+  let ok=false;
+  try {
+    if(navigator.mediaDevices?.getUserMedia){
+      const st = await navigator.mediaDevices.getUserMedia({video:{facingMode:"user",width:{ideal:640},height:{ideal:640}},audio:false});
+      if (!$("#scan")) { st.getTracks().forEach(t=>t.stop()); return; }
+      S.stream = st;
+      $("#scan").innerHTML=`<video id="vid" autoplay playsinline muted></video><div class="ring"></div><div class="scanline"></div>`;
+      $("#vid").srcObject=S.stream; ok=true;
+      $("#faceAct").innerHTML=`<button class="cta" id="snap">${I.face} Ambil foto wajah</button><button class="btn block" id="fBack">Kembali</button>`;
+      $("#snap").onclick=()=>{ if(!$("#vid").videoWidth) return toast("Kamera belum siap, tunggu sebentar."); const v=$("#vid"),c=document.createElement("canvas"),sz=Math.min(v.videoWidth,v.videoHeight)||480; c.width=c.height=320; const x=c.getContext("2d"); x.translate(320,0); x.scale(-1,1); x.drawImage(v,(v.videoWidth-sz)/2,(v.videoHeight-sz)/2,sz,sz,0,0,320,320); stopCam(); faceCaptured(c.toDataURL("image/jpeg",.8),true); };
+    }
+  } catch(e){ stopCam(); }
+  if(!$("#scan")) return;
+  if(!ok){
+    $("#scan").innerHTML=`<div class="ring"></div><span style="color:var(--primary)">${I.face.replace('width="22" height="22"','width="64" height="64"')}</span>`;
+    $("#faceAct").innerHTML=`<label class="cta" for="fFile" style="cursor:pointer">${I.face} Buka kamera depan</label>
+      <input type="file" id="fFile" accept="image/*" capture="user" hidden>
+      <p class="small muted" style="text-align:center">Kamera langsung tidak tersedia di tampilan ini, jadi ponsel akan membuka aplikasi kamera.</p>
+      <button class="btn block" id="fBack">Kembali</button>`;
+    $("#fFile").onchange=e=>{ const f=e.target.files?.[0]; if(!f) return; const r=new FileReader(); r.onload=()=>faceCaptured(r.result,false); r.readAsDataURL(f); };
+  }
+  $("#fBack").onclick=()=>{ stopCam(); setPos(F.pos.lat,F.pos.lng,F.pos.akurasi,F.pos.mode); if(F.ket&&$("#gKet")) $("#gKet").value=F.ket; };
+}
+/* Pencocokan wajah: deteksi + sidik wajah 128 angka (face-api), dibandingkan dengan data terdaftar */
+async function faceCaptured(src,flipped){
+  $("#scan").innerHTML=`<img id="faceImg" src="${src}" class="${flipped?'noflip':''}" alt="Foto wajah"><div class="ring spin"></div><div class="scanline"></div>`;
+  $("#faceAct").innerHTML=`<p class="muted" style="text-align:center;font-weight:600">Mencocokkan wajah…</p>`;
+  let res;
+  try { res = await faceDescriptor(src); } catch(e){ res = { err: e.message||String(e) }; }
+  if(!$("#scan")) return;
+  $("#scan").querySelector(".ring")?.classList.remove("spin"); $("#scan").querySelector(".scanline")?.remove();
+  const retry = msg => { $("#faceAct").innerHTML=`<div style="text-align:center"><span class="pill p-bad">${esc(msg)}</span></div><button class="cta" id="fRetake">Ulangi foto</button><button class="btn block" id="fBack2">Batal</button>`; $("#fRetake").onclick=stepWajah; $("#fBack2").onclick=closeSheet; };
+  if(res.err) return retry(res.err);
+  if(!S.wajah?.descriptor) return retry("Data wajah belum termuat. Coba lagi sebentar.");
+  const jarak = faceDist(res.d, S.wajah.descriptor);
+  if(jarak > FACE_THRESHOLD) return retry(`Wajah tidak cocok dengan akun ini (skor ${jarak.toFixed(2)})`);
+  F.face={ cocok:true, jarak:+jarak.toFixed(3) };
+  $("#faceAct").innerHTML=`<div style="text-align:center"><span class="pill p-ok">Wajah cocok · skor ${jarak.toFixed(2)}</span><p class="small muted" style="margin-top:6px">Foto tidak disimpan, hanya hasil pencocokan.</p></div>
+    <button class="cta" id="fNext">Lanjut ke konfirmasi</button><button class="btn block" id="fRetake">Ulangi foto</button>`;
+  $("#fNext").onclick=stepKonfirmasi; $("#fRetake").onclick=stepWajah;
+}
+
+function stepKonfirmasi(){
+  const now=new Date(), jam=timeStr(now), isIn=F.jenis==="masuk", sec=isSecurity(S.me.fungsi);
+  const tr=F.target.rec;
+  // Jadwal: pulang memakai jadwal saat masuk; selain itu Petugas Keamanan memilih shift, staf lain mengikuti premis
+  const fixed = !isIn && tr?.masuk && tr.jadwal;
+  const pick = !fixed && sec && F.pos.premisId!=="sikl";
+  if (pick && !F.shift) F.shift = suggestShift(F.jenis);
+  F.jadwal = fixed ? tr.jadwal : jadwalFor(S.me.fungsi, F.pos.premisId, F.shift);
+  const st = isIn ? statusMasuk(jam, F.jadwal) : statusPulang(now, F.jadwal, tr?.masuk ? F.target.key : null);
+  const warn = st==="Terlambat"||st==="Pulang cepat";
+  const picker = pick ? `<div class="stack" style="gap:6px;margin-top:14px"><span class="eyebrow">Pilih shift</span>
+      <div class="pchoice">${SHIFT_IDS.map(id=>{const j=jadwalById(id);return `<button type="button" class="btn ${F.shift===id?'primary':'ghost'} block" data-shift="${id}" aria-pressed="${F.shift===id}">${esc(j.nama)} <span class="mono" style="opacity:.8">${j.mulai}–${j.selesai}</span></button>`;}).join("")}</div></div>` : '';
+  $("#sheetBody").innerHTML = flowHead(3,"Konfirmasi absen "+F.jenis,"Periksa datanya, lalu kirim.") + picker +
+   `<div class="card flat stack" style="margin-top:16px">
+      <div class="row between"><span class="muted">Waktu</span><b class="mono" style="font-size:22px">${jam}</b></div>
+      <div class="row between"><span class="muted">Tanggal</span><b style="text-align:right">${longDate(now)}</b></div>
+      <div class="row between"><span class="muted">Jadwal</span><b style="text-align:right">${esc(F.jadwal.nama)}<br><span class="mono small muted">${F.jadwal.mulai}–${F.jadwal.selesai}${F.jadwal.lintas?' (+1 hari)':''}</span></b></div>
+      <div class="row between"><span class="muted">Status</span><span class="pill ${warn?'p-warn':'p-ok'}">${st}</span></div>
+      <div class="row between"><span class="muted">Premis</span><span class="premis" style="${F.pos.dalamRadius?'':'background:var(--bad-soft);color:var(--bad)'}">${I.bldg}${esc(F.pos.premisNama)}</span></div>
+      ${!isIn && tr?.masuk ? `<div class="row between"><span class="muted">Jam kerja</span><b class="mono">${fmtDur(durMin(tr.masuk.ts,now.toISOString()))}</b></div>` : ''}
+      ${!isIn && !tr?.masuk ? `<div class="row between"><span class="muted">Catatan</span><span class="pill p-bad">Tanpa absen masuk</span></div>` : ''}
+      <div class="row between"><span class="muted">Wajah</span><span class="pill p-ok">Cocok · skor ${F.face?.jarak ?? "-"}</span></div>
+      ${F.ket?`<div class="row between"><span class="muted">Keterangan</span><b style="text-align:right">${esc(F.ket)}</b></div>`:''}
+    </div>
+    <div class="stack" style="margin-top:16px"><button class="cta ${isIn?'':'out'}" id="kSend">${isIn?I.in:I.out} Kirim absen ${F.jenis}</button><button class="btn block" id="kCancel">Batal</button></div>`;
+  document.querySelectorAll("[data-shift]").forEach(b=>b.onclick=()=>{ F.shift=b.dataset.shift; stepKonfirmasi(); });
+  $("#kCancel").onclick=closeSheet;
+  $("#kSend").onclick=submitAbsen;
+}
+
+/* Bunyi bel "klunting" disintesis dengan Web Audio: dua nada lonceng dengan dengung harmonik */
+let AC=null;
+function unlockAudio(){ try{ AC = AC || new (window.AudioContext||window.webkitAudioContext)(); if(AC.state==="suspended") AC.resume(); }catch(e){ AC=null; } }
+function bell(){
+  if(!AC) return;
+  try{
+    const t0=AC.currentTime+0.02, out=AC.createGain(); out.gain.value=0.5; out.connect(AC.destination);
+    const strike=(freq,at,len)=>{ [[1,1],[2.76,.35],[5.4,.12]].forEach(([mul,amp])=>{
+      const o=AC.createOscillator(), g=AC.createGain(); o.type="sine"; o.frequency.value=freq*mul;
+      g.gain.setValueAtTime(0.0001,at); g.gain.exponentialRampToValueAtTime(amp,at+0.008); g.gain.exponentialRampToValueAtTime(0.0001,at+len/mul**0.5);
+      o.connect(g); g.connect(out); o.start(at); o.stop(at+len+0.05); }); };
+    strike(1318.5,t0,1.4);       // "klun"
+    strike(1760,t0+0.16,1.8);    // "ting"
+  }catch(e){}
+  try{ navigator.vibrate?.([40,60,40]); }catch(e){}
+}
+
+async function submitAbsen(){
+  unlockAudio();
+  const btn=$("#kSend"); btn.disabled=true; btn.textContent="Mengirim…";
+  const now=new Date(), jam=timeStr(now), tgl=dateKey(now), j=F.jadwal;
+  const rec={jam, ts:now.toISOString(), ...F.pos, wajah:F.face||null, keterangan:F.ket||""};
+  try{
+    if(F.jenis==="masuk"){
+      const ref=S.db.doc("absensi/"+tgl+"_"+S.me.uid);
+      const ex=await ref.get(); if(ex.exists && ex.data().masuk){ closeSheet(); return toast("Kamu sudah absen masuk hari ini."); }
+      await ref.set({tanggal:tgl, uid:S.me.uid, username:S.me.username, nama:S.me.nama, fungsi:S.me.fungsi, jadwal:j, masuk:rec, status:statusMasuk(jam,j)});
+    } else {
+      const key=F.target.key, ref=S.db.doc("absensi/"+key+"_"+S.me.uid);
+      const ex=await ref.get(), d=ex.exists?ex.data():null;
+      if(d?.pulang){ closeSheet(); return toast("Absen pulang untuk catatan ini sudah ada."); }
+      const sp=statusPulang(now, j, d?.masuk ? key : null);
+      if(d) await ref.update({pulang:rec, statusPulang:sp, ...(d.jadwal?{}:{jadwal:j})});
+      else await ref.set({tanggal:key, uid:S.me.uid, username:S.me.username, nama:S.me.nama, fungsi:S.me.fungsi, jadwal:j, pulang:rec, statusPulang:sp, status:""});
+    }
+    $("#sheetBody").innerHTML=`<div class="stack" style="align-items:center;text-align:center;padding:26px 0"><span style="color:var(--ok)">${I.check.replace('width="40" height="40"','width="72" height="72"')}</span>
+      <h2 style="font-size:22px">Absen ${F.jenis} tercatat</h2><p class="mono" style="font-size:30px;font-weight:700">${jam.slice(0,5)}</p><span class="premis" style="${rec.dalamRadius?'':'background:var(--bad-soft);color:var(--bad)'}">${I.bldg}${esc(rec.premisNama)}</span><p class="small muted">${esc(jadwalText(j))}</p><p class="muted">${longDate(now)}</p>
+      <button class="cta" id="kDone" style="margin-top:8px">Selesai</button></div>`;
+    $("#kDone").onclick=closeSheet;
+    bell();
+  }catch(ex){ btn.disabled=false; btn.textContent="Coba kirim lagi"; toast("Gagal mengirim. Periksa koneksi lalu coba lagi."); }
+}
+
+/* ===================== Ekspor ===================== */
+async function doExport(kind){
+  let from=$("#exFrom").value, to=$("#exTo").value;
+  if(!from||!to) return toast("Pilih rentang tanggal.");
+  if(from>to) [from,to]=[to,from];
+  let rows;
+  try{ const q=await S.db.collection("absensi").where("tanggal",">=",from).where("tanggal","<=",to).get(); rows=q.docs.map(d=>d.data()); }
+  catch(e){ return toast("Gagal mengambil data."); }
+  if(!rows.length) return toast("Tidak ada data pada rentang ini.");
+  rows.sort((a,b)=>a.tanggal.localeCompare(b.tanggal)||((a.masuk||a.pulang)?.jam||"").localeCompare((b.masuk||b.pulang)?.jam||""));
+  const head=["Tanggal","Nama","Fungsi/Bagian","Username","Jadwal","Kelengkapan","Jam Masuk","Status Masuk","Premis Masuk","Koordinat Masuk","Jam Pulang","Status Pulang","Premis Pulang","Koordinat Pulang","Jam Kerja","Jam Kerja (desimal)","Mode Lokasi","Keterangan"];
+  const data=rows.map(r=>{ const m=lengkap(r)?durMin(r.masuk.ts,r.pulang.ts):null; return [r.tanggal,r.nama,r.fungsi,r.username,r.jadwal?jadwalText(r.jadwal):"",lengkap(r)?"Lengkap":(r.masuk?"Tidak lengkap (tanpa pulang)":"Tidak lengkap (tanpa masuk)"),r.masuk?.jam||"",r.status||"",r.masuk?premisName(r.masuk):"",r.masuk?`${r.masuk.lat}, ${r.masuk.lng}`:"",r.pulang?.jam||"",r.statusPulang||"",r.pulang?premisName(r.pulang):"",r.pulang?`${r.pulang.lat}, ${r.pulang.lng}`:"",m==null?"":fmtDur(m),m==null?"":(m/60).toFixed(2),[r.masuk,r.pulang].some(x=>x?.mode==="demo")?"Demo":"GPS",[r.masuk?.keterangan,r.pulang?.keterangan].filter(Boolean).join(" / ")]; });
+  if(kind==="copy"){
+    const tsv=[head,...data].map(r=>r.map(v=>String(v).replace(/[\t\n]/g," ")).join("\t")).join("\n");
+    try{ await navigator.clipboard.writeText(tsv); toast(`${rows.length} baris disalin. Tempel di Google Sheets.`); }
+    catch(e){ openSheet(`<h2 style="font-size:20px">Salin manual</h2><p class="small muted" style="margin:6px 0 10px">Tekan lama di kotak, pilih Semua, lalu Salin.</p><textarea class="input mono" id="tsvBox" rows="10" style="font-size:12px" readonly>${esc(tsv)}</textarea><button class="btn block" style="margin-top:12px" id="tsvClose">Tutup</button>`); $("#tsvBox").select(); $("#tsvClose").onclick=closeSheet; }
+  } else {
+    const q=v=>{const s=String(v);return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s;};
+    const csv="﻿"+[head,...data].map(r=>r.map(q).join(",")).join("\n");
+    const name=`absensi-kbri-kl_${from}_${to}.csv`, blob=new Blob([csv],{type:"text/csv"});
+    try{
+      const file=new File([blob],name,{type:"text/csv"});
+      if(navigator.canShare && navigator.canShare({files:[file]})){ await navigator.share({files:[file], title:name}); return; }
+    }catch(e){ if(e?.name==="AbortError") return; }
+    const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download=name; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(()=>URL.revokeObjectURL(a.href),4000); toast("File CSV diunduh.");
+  }
+}
+
+
+/* ===================== Data wajah ===================== */
+const FACE_THRESHOLD = 0.5;        // jarak Euclid: makin kecil makin mirip; 0.5 = ketat namun wajar
+const FACE_LIB = "https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.15/dist/face-api.js";
+const FACE_MODELS = "https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.15/model/";
+let facePromise = null;
+function loadFace(){
+  if (facePromise) return facePromise;
+  facePromise = (async () => {
+    if (!window.faceapi) await new Promise((ok,no)=>{ const s=document.createElement("script"); s.src=FACE_LIB; s.onload=ok; s.onerror=()=>no(new Error("Gagal memuat pengenal wajah. Periksa koneksi.")); document.head.appendChild(s); });
+    await faceapi.nets.tinyFaceDetector.loadFromUri(FACE_MODELS);
+    await faceapi.nets.faceLandmark68TinyNet.loadFromUri(FACE_MODELS);
+    await faceapi.nets.faceRecognitionNet.loadFromUri(FACE_MODELS);
+  })();
+  facePromise.catch(()=>{ facePromise=null; });
+  return facePromise;
+}
+function loadImg(src){ return new Promise((ok,no)=>{ const i=new Image(); i.onload=()=>ok(i); i.onerror=()=>no(new Error("Foto tidak bisa dibaca.")); i.src=src; }); }
+async function faceDescriptor(src){
+  await loadFace();
+  const img = await loadImg(src);
+  const opts = new faceapi.TinyFaceDetectorOptions({ inputSize:416, scoreThreshold:0.5 });
+  const all = await faceapi.detectAllFaces(img, opts);
+  if (!all.length) return { err:"Wajah tidak terdeteksi. Hadapkan wajah ke kamera dengan cahaya cukup." };
+  if (all.length > 1) return { err:"Terdeteksi lebih dari satu wajah. Pastikan hanya kamu di foto." };
+  const r = await faceapi.detectSingleFace(img, opts).withFaceLandmarks(true).withFaceDescriptor();
+  if (!r) return { err:"Wajah kurang jelas. Coba lagi dengan cahaya lebih terang." };
+  return { d: Array.from(r.descriptor) };
+}
+function faceDist(a,b){ let s=0; for(let i=0;i<a.length;i++){ const d=a[i]-b[i]; s+=d*d; } return Math.sqrt(s); }
+
+/* Pendaftaran: 3 foto, rata-rata sidik wajah disimpan ke wajah/{uid} (bukan fotonya) */
+function openEnroll(after){
+  const shots=[];
+  openSheet(`<span class="eyebrow">Pendaftaran wajah</span><h2 style="font-size:22px;margin-top:4px">Daftarkan wajahmu</h2>
+    <p class="small muted" style="margin-top:4px">Ambil 3 foto wajah: lurus ke depan, sedikit ke kiri, dan sedikit ke kanan. Foto tidak disimpan, hanya sidik wajahnya.</p>
+    <div class="scanner" id="scan" style="margin-top:16px"><div class="ring spin"></div><span class="muted small">Membuka kamera…</span></div>
+    <div class="steps" id="enSteps" style="margin-top:12px"><i></i><i></i><i></i></div>
+    <div class="stack" id="faceAct" style="margin-top:10px"></div>`);
+  const status = msg => { const p=$("#enMsg"); if(p) p.textContent=msg; };
+  const markSteps = () => document.querySelectorAll("#enSteps i").forEach((el,i)=>el.classList.toggle("on", i<shots.length));
+  async function add(src){
+    status("Memproses foto…");
+    let r; try{ r=await faceDescriptor(src); }catch(e){ r={err:e.message||String(e)}; }
+    if(!$("#scan")) return;
+    if(r.err){ status(r.err); return; }
+    if(shots.length && faceDist(r.d, shots[0]) > 0.6){ status("Foto ini tidak mirip foto pertama. Pastikan orang yang sama."); return; }
+    shots.push(r.d); markSteps();
+    if(shots.length<3){ status(`Foto ${shots.length} dari 3 tersimpan. ${shots.length===1?"Sekarang miringkan sedikit ke kiri.":"Sekarang miringkan sedikit ke kanan."}`); return; }
+    const avg = shots[0].map((_,i)=>shots.reduce((s,d)=>s+d[i],0)/shots.length);
+    try{
+      await S.db.doc("wajah/"+S.me.uid).set({ descriptor:avg, dibuat:new Date().toISOString(), model:"face-api 1.7.15" });
+      S.wajah = { descriptor:avg, dibuat:new Date().toISOString() };
+      stopCam(); toast("Wajah berhasil didaftarkan."); closeSheet(); render(); if(after) after();
+    }catch(e){ status("Gagal menyimpan data wajah. Periksa koneksi lalu coba lagi."); }
+  }
+  (async()=>{
+    let ok=false;
+    try{
+      loadFace().catch(()=>{});
+      const st = await navigator.mediaDevices.getUserMedia({video:{facingMode:"user",width:{ideal:640},height:{ideal:640}},audio:false});
+      if(!$("#scan")){ st.getTracks().forEach(t=>t.stop()); return; }
+      S.stream=st; ok=true;
+      $("#scan").innerHTML=`<video id="vid" autoplay playsinline muted></video><div class="ring"></div>`; $("#vid").srcObject=st;
+      $("#faceAct").innerHTML=`<p class="small muted" id="enMsg" style="text-align:center">Posisikan wajah lurus ke depan.</p><button class="cta" id="enSnap">${I.face} Ambil foto</button><button class="btn block" id="enCancel">Batal</button>`;
+      $("#enSnap").onclick=()=>{ const v=$("#vid"); if(!v.videoWidth) return toast("Kamera belum siap."); const c=document.createElement("canvas"); const sz=Math.min(v.videoWidth,v.videoHeight); c.width=c.height=480; const x=c.getContext("2d"); x.translate(480,0); x.scale(-1,1); x.drawImage(v,(v.videoWidth-sz)/2,(v.videoHeight-sz)/2,sz,sz,0,0,480,480); add(c.toDataURL("image/jpeg",.9)); };
+    }catch(e){ stopCam(); }
+    if(!$("#scan")) return;
+    if(!ok){
+      $("#scan").innerHTML=`<div class="ring"></div><span style="color:var(--primary)">${I.face.replace('width="22" height="22"','width="64" height="64"')}</span>`;
+      $("#faceAct").innerHTML=`<p class="small muted" id="enMsg" style="text-align:center">Izinkan kamera, atau ambil foto lewat aplikasi kamera.</p><label class="cta" for="enFile" style="cursor:pointer">${I.face} Buka kamera depan</label><input type="file" id="enFile" accept="image/*" capture="user" hidden><button class="btn block" id="enCancel">Batal</button>`;
+      $("#enFile").onchange=e=>{ const f=e.target.files?.[0]; if(!f) return; const r=new FileReader(); r.onload=()=>add(r.result); r.readAsDataURL(f); e.target.value=""; };
+    }
+    $("#enCancel").onclick=closeSheet;
+  })();
+}
+
+/* ===================== PWA: service worker & tombol pasang ===================== */
+if ("serviceWorker" in navigator) window.addEventListener("load", () => navigator.serviceWorker.register("sw.js").catch(()=>{}));
+
+let installEvt=null;
+window.addEventListener("beforeinstallprompt", e => { e.preventDefault(); installEvt=e; render(); });
+window.addEventListener("appinstalled", () => { installEvt=null; toast("Aplikasi terpasang di layar utama."); render(); });
+const isStandalone = () => window.matchMedia?.("(display-mode: standalone)").matches || navigator.standalone === true;
+const isIOS = () => /iphone|ipad|ipod/i.test(navigator.userAgent);
+function installHint(){
+  if (isStandalone()) return "";
+  if (installEvt) return `<button class="btn ghost block" id="installBtn">${I.dl} Pasang aplikasi di layar utama</button>`;
+  if (isIOS()) return `<p class="small muted" style="text-align:center">Pasang di iPhone: buka di Safari, ketuk tombol Bagikan, lalu pilih <b>Tambah ke Layar Utama</b>.</p>`;
+  return "";
+}
+document.addEventListener("click", async e => {
+  if (e.target.closest?.("#installBtn") && installEvt) { installEvt.prompt(); try{ await installEvt.userChoice; }catch(_){} installEvt=null; render(); }
+});
