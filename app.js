@@ -63,6 +63,8 @@ const store = { get(k){try{return localStorage.getItem(k)}catch(e){return null}}
 function toast(msg){const t=document.createElement("div");t.className="toast";t.textContent=msg;document.body.appendChild(t);setTimeout(()=>t.remove(),2600);}
 
 const I = {
+  cal:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4.5" width="18" height="16.5" rx="4"/><path d="M8 2.5v4M16 2.5v4M3 10h18"/></svg>',
+  clip:'<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5l-8.6 8.6a5 5 0 0 1-7.1-7.1l9.2-9.2a3.4 3.4 0 0 1 4.8 4.8l-9.2 9.2a1.7 1.7 0 0 1-2.4-2.4l8.5-8.5"/></svg>',
   tick:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>',
   cross:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round"><path d="M7 7l10 10M17 7L7 17"/></svg>',
   dash:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M7 12h10"/></svg>',
@@ -90,7 +92,7 @@ const S = { db:null, auth:null, booted:false, setupNeeded:false, wajah:undefined
   today:null, history:[], staff:[], rekapDate:dateKey(), rekap:[], subs:[], rekapUnsub:null, stream:null };
 
 /* Re-render only when the current screen shows the data that changed, so typing in a form is never wiped */
-const DEPS={home:["cfg","today","history","cuaca","wajah"],riwayat:["history"],profil:["wajah"],rekap:["cfg","staff","rekap"],staff:["staff"],atur:[]};
+const DEPS={home:["cfg","today","history","cuaca","wajah","izin"],riwayat:["history","izin","kal"],profil:["wajah"],rekap:["cfg","staff","rekap","izin"],kalender:["staff","izin","kal"],staff:["staff"],atur:[]};
 function refresh(k){ if(S.me && (DEPS[S.tab]||[]).includes(k)) render(); }
 function clearSubs(){ S.subs.forEach(u=>{try{u()}catch(e){}}); S.subs=[]; if(S.rekapUnsub){try{S.rekapUnsub()}catch(e){} S.rekapUnsub=null;} if(S.todayUnsub){try{S.todayUnsub()}catch(e){} S.todayUnsub=null;} if(S.ydayUnsub){try{S.ydayUnsub()}catch(e){} S.ydayUnsub=null;} }
 
@@ -138,7 +140,7 @@ async function login(e){
     err.hidden=false; btn.disabled=false; btn.textContent="Masuk";
   }
 }
-function endSession(){ closeSheet(); clearSubs(); S.me=null; S.tab=null; S.today=null; S.yday=null; S.history=[]; S.staff=[]; S.rekap=[]; S.dayKey=null; S.wajah=undefined; }
+function endSession(){ closeSheet(); clearSubs(); S.me=null; S.tab=null; S.today=null; S.yday=null; S.history=[]; S.allRecs=[]; S.izin=[]; S.kalRecs=null; S.staff=[]; S.rekap=[]; S.dayKey=null; S.wajah=undefined; }
 async function logout(){ endSession(); render(); try { await S.auth?.signOut(); } catch(e){} }
 
 /* Penyiapan pertama: membuat akun admin pertama dan pengaturan awal dalam satu batch */
@@ -171,27 +173,27 @@ function startSession(d){
   clearSubs();
   S.me = d; S.tab = d.role === "admin" ? "rekap" : "home";
   S.subs.push(S.db.doc("config/kantor").onSnapshot(s => { if (s.exists) { S.cfg = normCfg(s.data()); refresh("cfg"); } }, ()=>{}));
+  S.calMonth = dateKey().slice(0,7);
   if (d.role === "admin") {
+    S.subs.push(S.db.collection("izin").onSnapshot(q => { S.izin = q.docs.map(x=>({...x.data(), _id:x.id})); refresh("izin"); }, ()=>{}));
     S.subs.push(S.db.collection("staff").onSnapshot(q => { S.staff = q.docs.map(x=>({...x.data(), uid:x.id})).sort((a,b)=>String(a.nama).localeCompare(String(b.nama))); refresh("staff"); }, ()=>{}));
     subRekap();
   } else {
     subToday();
     startWeather();
-    S.subs.push(S.db.collection("absensi").where("uid","==",d.uid).onSnapshot(q => { S.history = q.docs.map(x=>x.data()).sort((a,b)=>b.tanggal.localeCompare(a.tanggal)).slice(0,30); refresh("history"); }, ()=>{}));
+    S.subs.push(S.db.collection("izin").where("uid","==",d.uid).onSnapshot(q => { S.izin = q.docs.map(x=>({...x.data(), _id:x.id})); refresh("izin"); }, ()=>{}));
+    S.subs.push(S.db.collection("absensi").where("uid","==",d.uid).onSnapshot(q => {
+      S.allRecs = q.docs.map(x=>({...x.data(), _id:x.id}));
+      S.history = [...S.allRecs].sort((a,b)=>b.tanggal.localeCompare(a.tanggal)||(b.sesi||1)-(a.sesi||1)).slice(0,40);
+      refresh("history"); refresh("today");
+    }, ()=>{}));
     S.subs.push(S.db.doc("staff/"+d.uid).onSnapshot(s => { if (!s.exists || s.data().aktif===false) { toast("Akun tidak aktif lagi."); logout(); } else { S.me = { ...s.data(), uid:d.uid }; } }, ()=>{}));
     S.subs.push(S.db.doc("wajah/"+d.uid).onSnapshot(s => { S.wajah = s.exists ? s.data() : null; refresh("wajah"); }, ()=>{ S.wajah = null; }));
   }
   render();
 }
 /* Today's record; re-subscribed when the date changes while the app stays open */
-function subToday(){
-  if (S.todayUnsub) { try{S.todayUnsub()}catch(e){} }
-  if (S.ydayUnsub) { try{S.ydayUnsub()}catch(e){} }
-  S.dayKey = dateKey(); S.today = null; S.yday = null;
-  const yKey = dateKey(new Date(Date.now()-86400000));
-  S.todayUnsub = S.db.doc("absensi/"+S.dayKey+"_"+S.me.uid).onSnapshot(s => { S.today = s.exists ? s.data() : null; refresh("today"); }, ()=>{});
-  S.ydayUnsub = S.db.doc("absensi/"+yKey+"_"+S.me.uid).onSnapshot(s => { S.yday = s.exists ? s.data() : null; refresh("today"); }, ()=>{});
-}
+function subToday(){ S.dayKey = dateKey(); refresh("today"); }
 function subRekap(){
   if (S.rekapUnsub) { try{S.rekapUnsub()}catch(e){} }
   S.rekap = [];
@@ -206,8 +208,11 @@ const WMO = c => c===0 ? ["sun","Cerah"] : c===1 ? ["sun","Cerah berawan"] : c==
 let wxTimer=null;
 async function loadWeather(){
   try{
-    const url="https://api.open-meteo.com/v1/forecast?latitude=3.1467&longitude=101.7219&current=temperature_2m,weather_code,is_day&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max&timezone=Asia%2FKuala_Lumpur&forecast_days=1";
-    const d=await fetch(url).then(r=>r.json()); const [jenis,kondisi]=WMO(d.current.weather_code);
+    const url="https://api.open-meteo.com/v1/forecast?latitude=3.1467&longitude=101.7219&current=temperature_2m,weather_code,is_day,precipitation&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max&timezone=Asia%2FKuala_Lumpur&forecast_days=1";
+    const d=await fetch(url).then(r=>r.json()); let [jenis,kondisi]=WMO(d.current.weather_code);
+    // Kode cuaca kadang masih "mendung" padahal curah hujan jam ini sudah tercatat: tampilkan sebagai hujan
+    const mm=+d.current.precipitation||0;
+    if(mm>0 && (jenis==="cloud"||jenis==="sun"||jenis==="fog")){ jenis="rain"; kondisi = mm<0.5 ? "Gerimis" : mm<2.5 ? "Hujan ringan" : "Hujan"; }
     S.cuaca={ suhu:d.current.temperature_2m, kondisi, jenis, siang:!!d.current.is_day, tinggi:d.daily.temperature_2m_max[0], rendah:d.daily.temperature_2m_min[0], hujan:d.daily.precipitation_probability_max[0], diperbarui:new Date().toISOString() };
     store.set("cuaca", JSON.stringify(S.cuaca)); refresh("cuaca");
   }catch(e){ try{ const c=JSON.parse(store.get("cuaca")||"null"); if(c){ S.cuaca=c; refresh("cuaca"); } }catch(_){} }
@@ -235,8 +240,8 @@ function skyLayer(key){
   const [j,dn]=key.split("-");
   if(j==="sun") parts.push('<i class="sunglow"></i>');
   if(j==="clear"){ parts.push('<i class="moonglow"></i>'); for(let i=0;i<26;i++) parts.push(`<i class="star" style="left:${(r()*100).toFixed(1)}%;top:${(r()*70).toFixed(1)}%;animation-delay:${(r()*3).toFixed(2)}s;opacity:${(.3+r()*.7).toFixed(2)}"></i>`); }
-  const nCloud = {sun:1,clear:0,cloud:5,rain:4,storm:5,fog:2}[j]||0, cOp = dn==="n" ? .16 : .42;
-  for(let i=0;i<nCloud;i++){ const w=120+r()*160; parts.push(`<i class="cl" style="width:${w|0}px;height:${(w*.45)|0}px;left:${(r()*90-20).toFixed(1)}%;top:${(r()*45-10).toFixed(1)}%;opacity:${cOp};animation-duration:${(30+r()*30)|0}s"></i>`); }
+  const nCloud = {sun:1,clear:0,cloud:7,rain:5,storm:6,fog:2}[j]||0, cOp = dn==="n" ? .32 : .5;
+  for(let i=0;i<nCloud;i++){ const w=140+r()*170; parts.push(`<i class="cl" style="width:${w|0}px;height:${(w*.45)|0}px;left:${(r()*100-30).toFixed(1)}%;top:${(r()*55-12).toFixed(1)}%;opacity:${(cOp*(.7+r()*.5)).toFixed(2)};animation-duration:${(14+r()*14)|0}s;animation-delay:${(-r()*14).toFixed(1)}s"></i>`); }
   if(j==="rain"||j==="storm"){ const n=j==="storm"?60:42; for(let i=0;i<n;i++) parts.push(`<i class="drop" style="left:${(r()*110).toFixed(1)}%;animation-delay:${(-r()*1.2).toFixed(2)}s;animation-duration:${(.65+r()*.5).toFixed(2)}s;opacity:${(.35+r()*.6).toFixed(2)}"></i>`); }
   if(j==="storm") parts.push('<i class="flash"></i>');
   if(j==="fog") for(let i=0;i<4;i++) parts.push(`<i class="mist" style="top:${20+i*22}%;animation-duration:${(20+r()*20)|0}s"></i>`);
@@ -267,10 +272,16 @@ function statusPulang(now, j, startKey){
   return now < end ? "Pulang cepat" : "Sesuai jadwal";
 }
 /* Catatan yang sedang berjalan: shift malam kemarin yang belum ditutup menang atas hari ini yang masih kosong */
+const bySesi=(a,b)=>(a.sesi||1)-(b.sesi||1);
+function todayRecs(){ return (S.allRecs||[]).filter(r=>r.tanggal===S.dayKey).sort(bySesi); }
+/* Sesi aktif: sesi hari ini yang belum absen pulang; shift malam kemarin yang belum ditutup bila hari ini masih kosong */
 function activeRec(){
-  const y=S.yday, t=S.today;
-  if (!(t?.masuk||t?.pulang) && y?.masuk && !y.pulang && y.jadwal?.lintas) return { rec:y, key:y.tanggal, kemarin:true };
-  return { rec:t, key:S.dayKey, kemarin:false };
+  const t=todayRecs(), open=[...t].reverse().find(r=>r.masuk&&!r.pulang);
+  if (open) return { rec:open, key:open.tanggal, kemarin:false, sesiCount:t.length };
+  const yKey=dateKey(new Date(Date.now()-86400000));
+  const y=(S.allRecs||[]).filter(r=>r.tanggal===yKey && r.masuk && !r.pulang && r.jadwal?.lintas).sort(bySesi).pop();
+  if (y && !t.length) return { rec:y, key:y.tanggal, kemarin:true, sesiCount:0 };
+  return { rec:t[t.length-1]||null, key:S.dayKey, kemarin:false, sesiCount:t.length };
 }
 function pillFor(rec){
   if (!rec || (!rec.masuk && !rec.pulang)) return '<span class="pill p-mute">Belum absen</span>';
@@ -287,7 +298,7 @@ function render(){
   if (!S.me) { if (S.booted===false) { root.innerHTML = `<div class="login"><img class="logo-lg" src="${LOGO}" alt=""><p class="muted" style="text-align:center">Memuat…</p></div>`; removeNav(); return; }
     const keep={u:$("#lu")?.value||"",p:$("#lp")?.value||""}; root.innerHTML = viewLogin(); if($("#lu")){ $("#lu").value=keep.u; $("#lp").value=keep.p; } $("#lform")?.addEventListener("submit", login); $("#suForm")?.addEventListener("submit", setupFirstAdmin); $("#pwt")?.addEventListener("click", ()=>{const i=$("#lp");i.type=i.type==="password"?"text":"password";}); removeNav(); return; }
   const focusId = document.activeElement?.id;
-  const views = { home:viewHome, riwayat:viewRiwayat, profil:viewProfil, rekap:viewRekap, staff:viewStaff, atur:viewAtur };
+  const views = { home:viewHome, riwayat:viewRiwayat, profil:viewProfil, rekap:viewRekap, kalender:viewKalenderAdmin, staff:viewStaff, atur:viewAtur };
   root.innerHTML = topbar() + (views[S.tab]||viewHome)();
   bindView();
   renderNav();
@@ -334,17 +345,17 @@ function viewSetup(){
 
 function viewHome(){
   const A = activeRec(), t = A.rec, now = timeStr(), sec = isSecurity(S.me.fungsi);
-  const doneIn = !!t?.masuk, doneOut = !!t?.pulang;
-  let cta;
-  if (!doneIn && !doneOut) cta = `<button class="cta" id="doIn">${I.in} Absen Masuk</button><button class="cta sec" id="doOut">${I.out} Lupa absen masuk? Absen Pulang</button>`;
-  else if (doneIn && !doneOut && A.kemarin) cta = `<button class="cta out" id="doOut">${I.out} Absen Pulang Shift Malam</button><button class="cta sec" id="doIn">${I.in} Mulai absen masuk baru</button>`;
-  else if (doneIn && !doneOut) cta = `<button class="cta out" id="doOut">${I.out} Absen Pulang</button>`;
-  else if (!doneIn && doneOut) cta = `<button class="cta" disabled>Absen pulang tercatat tanpa absen masuk</button>`;
-  else cta = `<button class="cta" disabled>${I.check.replace('width="40" height="40"','width="22" height="22"')} Absensi hari ini lengkap</button>`;
-  const durBox = doneIn && doneOut
-    ? `<div class="dur"><div class="row" style="gap:10px">${markFor(t)}<div><span class="eyebrow">Total jam kerja</span><p class="small muted">Masuk dan pulang lengkap</p></div></div><b>${fmtDur(durMin(t.masuk.ts,t.pulang.ts))}</b></div>`
-    : doneIn ? `<div class="dur"><div class="row" style="gap:10px">${markFor(t)}<div><span class="eyebrow">Sedang bekerja</span><p class="small muted">Belum absen pulang</p></div></div><b id="durLive">${fmtDur(durMin(t.masuk.ts,new Date().toISOString()))}</b></div>`
-    : doneOut ? `<div class="dur"><div class="row" style="gap:10px">${markFor(t)}<div><span class="eyebrow">Jam kerja</span><p class="small muted">Tidak ada absen masuk</p></div></div><b class="muted">—</b></div>` : "";
+  const doneIn = !!t?.masuk, doneOut = !!t?.pulang, open = doneIn && !doneOut;
+  const cta = open
+    ? `<button class="cta out" id="doOut">${I.out} Absen Pulang${A.kemarin?' Shift Malam':''}</button><button class="cta sec" id="doIn">${I.in} Absen Masuk lagi (sesi baru)</button>`
+    : `<button class="cta" id="doIn">${I.in} Absen Masuk${A.sesiCount?' (sesi baru)':''}</button><button class="cta sec" id="doOut">${I.out} Absen Pulang${A.sesiCount?'':' (tanpa absen masuk)'}</button>`;
+  const izinHariIni = izinOn(S.dayKey, S.me.uid);
+  const hari = A.kemarin ? [t] : todayRecs();
+  const totalMin = hari.reduce((m,r)=> m + (lengkap(r) ? durMin(r.masuk.ts,r.pulang.ts) : 0), 0);
+  const semuaLengkap = hari.length && hari.every(lengkap);
+  const durBox = !t ? "" : open
+    ? `<div class="dur"><div class="row" style="gap:10px">${markFor(t)}<div><span class="eyebrow">Sedang bekerja${t.sesi>1?` · sesi ${t.sesi}`:''}</span><p class="small muted">${totalMin?`Sesi sebelumnya ${fmtDur(totalMin)}`:'Belum absen pulang'}</p></div></div><b id="durLive">${fmtDur(durMin(t.masuk.ts,new Date().toISOString()))}</b></div>`
+    : `<div class="dur"><div class="row" style="gap:10px">${semuaLengkap?markFor(t):`<span class="chk no" title="Ada sesi tidak lengkap">${I.cross}</span>`}<div><span class="eyebrow">Total jam kerja hari ini</span><p class="small muted">${hari.length>1?`${hari.length} sesi · `:''}${semuaLengkap?'Masuk dan pulang lengkap':'Ada absen yang tidak lengkap'}</p></div></div><b${hari.some(lengkap)?'':' class="muted"'}>${hari.some(lengkap)?fmtDur(totalMin):'—'}</b></div>`;
   const premisList = S.cfg.premis.map(p=>`<span class="premis">${I.bldg}${esc(p.nama)}</span>`).join(" ");
   const tilePremis = x => x ? `<span class="premis" style="${x.dalamRadius===false?'background:var(--bad-soft);color:var(--bad)':''}">${I.bldg}${esc(premisName(x))}</span>` : '';
   return `
@@ -364,7 +375,9 @@ function viewHome(){
     <div class="tile"><span class="eyebrow">Pulang</span><span class="t ${t?.pulang?'':'empty'}">${t?.pulang? esc(t.pulang.jam.slice(0,5)) : '--:--'}</span>${t?.pulang? (t.statusPulang==='Pulang cepat'?'<span class="pill p-warn">Pulang cepat</span>':'<span class="pill p-ok">Sesuai jadwal</span>')+tilePremis(t.pulang) : '<span class="small muted">Belum tercatat</span>'}</div>
   </div>
   ${durBox}
-  ${cta}
+  ${izinHariIni ? izinBanner(izinHariIni) : ''}
+  ${izinHariIni?.jenis==="cuti" ? '' : cta}
+  <button class="btn ghost block" id="izinBtn">${I.cal.replace('<svg ','<svg width="18" height="18" ')} Ajukan cuti / izin sakit</button>
   <div class="card flat stack" style="gap:8px">
     <span class="eyebrow">Premis kerja terdaftar</span>
     <div class="row wrap" style="gap:6px">${premisList}</div>
@@ -375,7 +388,7 @@ function viewHome(){
 
 function histList(arr){
   if (!arr.length) return `<div class="empty">${I.hist}<p>Riwayat kehadiranmu akan muncul di sini setelah absen pertama.</p></div>`;
-  return `<div class="list">${arr.map(r=>`<div class="item">${markFor(r)}<div class="grow"><div class="name">${shortDate(r.tanggal)}</div><div class="sub">${esc(premisName(r.masuk||r.pulang))}${r.jadwal?` · ${esc(r.jadwal.nama)}`:''}</div></div>
+  return `<div class="list">${arr.map(r=>`<div class="item">${markFor(r)}<div class="grow"><div class="name">${shortDate(r.tanggal)}${r.sesi>1?` · sesi ${r.sesi}`:''}</div><div class="sub">${esc(premisName(r.masuk||r.pulang))}${r.jadwal?` · ${esc(r.jadwal.nama)}`:''}</div></div>
     <div class="times">${esc(r.masuk?.jam?.slice(0,5)||'--:--')} <span class="muted">→</span> ${esc(r.pulang?.jam?.slice(0,5)||'--:--')}<span class="dur-s">${esc(durText(r))}</span></div></div>`).join("")}</div>`;
 }
 
@@ -389,6 +402,8 @@ function viewRiwayat(){
     <div class="stat" style="color:var(--warn)"><b>${late}</b><span>Terlambat</span></div>
     <div class="stat" style="color:var(--primary)"><b>${ok.length?Math.round(totalMin/ok.length/6)/10:0}</b><span>Rata² jam</span></div>
   </div>
+  ${calendarCard((S.allRecs||[]), (S.izin||[]), "Kalender kehadiran")}
+  ${izinListCard(S.izin||[], false)}
   <div class="card">${histList(h)}</div>
   <p class="small muted"><span class="chk ok" style="width:18px;height:18px;vertical-align:-4px">${I.tick}</span> masuk & pulang lengkap &nbsp; <span class="chk no" style="width:18px;height:18px;vertical-align:-4px">${I.cross}</span> hanya masuk atau hanya pulang. Menampilkan 30 catatan terakhir.</p>`;
 }
@@ -420,8 +435,10 @@ function pwCard(){
 function viewRekap(){
   const active = S.staff.filter(s=>s.role!=="admin" && s.aktif!==false);
   const byUser = Object.fromEntries(S.rekap.map(r=>[r.uid,r]));
-  const hadir = S.rekap.length, late = S.rekap.filter(r=>r.status==="Terlambat").length, tdk = S.rekap.filter(r=>!lengkap(r)).length;
-  const belum = active.filter(s=>!byUser[s.uid]);
+  const hadir = new Set(S.rekap.filter(r=>r.masuk).map(r=>r.uid)).size, late = S.rekap.filter(r=>r.status==="Terlambat").length, tdk = S.rekap.filter(r=>!lengkap(r)).length;
+  const izinHari = (S.izin||[]).filter(z=>z.mulai<=S.rekapDate && z.selesai>=S.rekapDate);
+  const izinUid = new Set(izinHari.map(z=>z.uid));
+  const belum = active.filter(s=>!byUser[s.uid] && !izinUid.has(s.uid));
   const rows = [...S.rekap].sort((a,b)=>((a.masuk||a.pulang)?.jam||"").localeCompare((b.masuk||b.pulang)?.jam||""));
   const perPremis = S.cfg.premis.map(p=>({p, n:S.rekap.filter(r=>(r.masuk||r.pulang)?.premisId===p.id || (!(r.masuk||r.pulang)?.premisId && p.id==="kbri" && (r.masuk||r.pulang)?.dalamRadius!==false)).length}));
   const luar = S.rekap.filter(r=>(r.masuk||r.pulang)?.dalamRadius===false).length;
@@ -438,10 +455,11 @@ function viewRekap(){
     ${luar?`<div class="row between"><span class="premis" style="background:var(--bad-soft);color:var(--bad)">${I.bldg}Di luar premis</span><b class="mono">${luar}</b></div>`:''}
   </div>
   <div class="card stack"><h3 style="font-size:16px">Sudah absen</h3>
-    ${rows.length ? `<div class="list">${rows.map(r=>`<div class="item">${markFor(r)}<div class="grow"><div class="name">${esc(r.nama)}</div><div class="sub">${esc(r.fungsi)}</div><div class="sub">${esc(premisName(r.masuk||r.pulang))} · ${esc(durText(r))}</div>${r.jadwal?`<div class="sub">${esc(jadwalText(r.jadwal))}</div>`:''}<div style="margin-top:4px">${pillFor(r)}${(r.masuk||r.pulang)?.keterangan?` <span class="small muted">· ${esc((r.masuk||r.pulang).keterangan)}</span>`:''}</div></div>
+    ${rows.length ? `<div class="list">${rows.map(r=>`<div class="item">${markFor(r)}<div class="grow"><div class="name">${esc(r.nama)}${r.sesi>1?` <span class="small muted">· sesi ${r.sesi}</span>`:''}</div><div class="sub">${esc(r.fungsi)}</div><div class="sub">${esc(premisName(r.masuk||r.pulang))} · ${esc(durText(r))}</div>${r.jadwal?`<div class="sub">${esc(jadwalText(r.jadwal))}</div>`:''}<div style="margin-top:4px">${pillFor(r)}${(r.masuk||r.pulang)?.keterangan?` <span class="small muted">· ${esc((r.masuk||r.pulang).keterangan)}</span>`:''}</div></div>
       <div class="times">${esc(r.masuk?.jam?.slice(0,5)||'--:--')}<br><span class="muted">${esc(r.pulang?.jam?.slice(0,5)||'--:--')}</span></div></div>`).join("")}</div>`
       : `<div class="empty">${I.chart}<p>Belum ada staf yang absen pada tanggal ini.</p></div>`}
   </div>
+  ${izinHari.length?`<div class="card stack"><h3 style="font-size:16px">Cuti & izin</h3><div class="list">${izinHari.map(z=>izinRow(z,true)).join("")}</div></div>`:''}
   ${belum.length?`<div class="card stack"><h3 style="font-size:16px">Belum absen</h3><div class="list">${belum.map(s=>`<div class="item"><div class="ini" style="background:var(--surface-2);color:var(--muted)">${esc(initials(s.nama))}</div><div class="grow"><div class="name">${esc(s.nama)}</div><div class="sub">${esc(s.fungsi)}</div></div></div>`).join("")}</div></div>`:''}
   ${exportCard()}`;
 }
@@ -493,11 +511,11 @@ function viewAtur(){
 function removeNav(){ $("#nav")?.remove(); }
 function renderNav(){
   removeNav();
-  const items = S.me.role==="admin" ? [["rekap","Rekap",I.chart],["staff","Staf",I.team],["atur","Pengaturan",I.gear]] : [["home","Beranda",I.home],["riwayat","Riwayat",I.hist],["profil","Profil",I.user]];
+  const items = S.me.role==="admin" ? [["rekap","Rekap",I.chart],["kalender","Kalender",I.cal],["staff","Staf",I.team],["atur","Atur",I.gear]] : [["home","Beranda",I.home],["riwayat","Riwayat",I.hist],["profil","Profil",I.user]];
   const n = document.createElement("nav"); n.className="nav"; n.id="nav";
   n.innerHTML = items.map(([k,l,ic])=>`<button data-go="${k}" class="${S.tab===k?'on':''}" aria-label="${l}">${ic}<span>${l}</span></button>`).join("");
   document.body.appendChild(n);
-  n.querySelectorAll("[data-go]").forEach(b=>b.onclick=()=>{S.tab=b.dataset.go;render();window.scrollTo(0,0);});
+  n.querySelectorAll("[data-go]").forEach(b=>b.onclick=()=>{S.tab=b.dataset.go; if(S.tab==="kalender") loadKalAdmin(); render();window.scrollTo(0,0);});
 }
 
 function bindView(){
@@ -507,6 +525,11 @@ function bindView(){
   $("#doOut") && ($("#doOut").onclick = ()=>openFlow("pulang"));
   $("#pwForm") && ($("#pwForm").onsubmit = changePw);
   $("#enrollBtn") && ($("#enrollBtn").onclick = ()=>openEnroll());
+  $("#izinBtn") && ($("#izinBtn").onclick = ()=>openIzinForm());
+  document.querySelectorAll("[data-cal]").forEach(b=>b.onclick=()=>{ S.calMonth=shiftMonth(S.calMonth,+b.dataset.cal); if(S.tab==="kalender") loadKalAdmin(); render(); });
+  document.querySelectorAll("[data-berkas]").forEach(b=>b.onclick=()=>openBerkas(b.dataset.berkas, b.dataset.nama));
+  document.querySelectorAll("[data-hapusizin]").forEach(b=>b.onclick=()=>hapusIzin(b.dataset.hapusizin));
+  $("#calStaff") && ($("#calStaff").onchange = e=>{ S.calStaff=e.target.value; render(); });
   $("#rDate") && ($("#rDate").onchange = e=>{ if(e.target.value){S.rekapDate=e.target.value; S.exFrom=S.exTo=null; subRekap(); render();} });
   $("#exFrom") && ($("#exFrom").onchange = e=>{ S.exFrom=e.target.value; });
   $("#exTo") && ($("#exTo").onchange = e=>{ S.exTo=e.target.value; });
@@ -613,9 +636,11 @@ const F = {};
 function getPos(){ return new Promise((res,rej)=>{ if(!navigator.geolocation) return rej(new Error("no-geo")); navigator.geolocation.getCurrentPosition(res,rej,{enableHighAccuracy:true,timeout:12000,maximumAge:0}); }); }
 
 function openFlow(jenis){
+  const cutiNow = izinOn(dateKey(), S.me.uid);
+  if (cutiNow?.jenis==="cuti") return toast("Kamu sedang cuti. Absen dinonaktifkan.");
   const A = activeRec();
   // Absen pulang menutup catatan aktif (termasuk shift malam kemarin); absen masuk selalu untuk hari ini
-  const target = jenis==="pulang" && A.rec?.masuk && !A.rec.pulang ? { key:A.key, rec:A.rec } : { key:dateKey(), rec: jenis==="pulang" ? S.today : null };
+  const target = jenis==="pulang" && A.rec?.masuk && !A.rec.pulang ? { key:A.rec.tanggal, rec:A.rec, id:A.rec._id } : { key:dateKey(), rec:null, id:null };
   Object.assign(F,{jenis,pos:null,face:null,ket:"",target,shift:null});
   openSheet(""); stepLokasi();
 }
@@ -793,23 +818,33 @@ function bell(){
   try{ navigator.vibrate?.([40,60,40]); }catch(e){}
 }
 
+/* Sesi baru di hari yang sama: TANGGAL_UID, lalu TANGGAL_UID_2, _3, … */
+async function nextSession(tgl){
+  const baseId=tgl+"_"+S.me.uid;
+  for(let n=1;n<=30;n++){
+    const ref=S.db.doc("absensi/"+(n===1?baseId:baseId+"_"+n)), ex=await ref.get();
+    if(!ex.exists) return { ref, sesi:n };
+  }
+  throw new Error("Terlalu banyak sesi hari ini.");
+}
 async function submitAbsen(){
   unlockAudio();
   const btn=$("#kSend"); btn.disabled=true; btn.textContent="Mengirim…";
   const now=new Date(), jam=timeStr(now), tgl=dateKey(now), j=F.jadwal;
   const rec={jam, ts:now.toISOString(), ...F.pos, wajah:F.face||null, keterangan:F.ket||""};
   try{
+    const base={uid:S.me.uid, username:S.me.username, nama:S.me.nama, fungsi:S.me.fungsi, jadwal:j};
     if(F.jenis==="masuk"){
-      const ref=S.db.doc("absensi/"+tgl+"_"+S.me.uid);
-      const ex=await ref.get(); if(ex.exists && ex.data().masuk){ closeSheet(); return toast("Kamu sudah absen masuk hari ini."); }
-      await ref.set({tanggal:tgl, uid:S.me.uid, username:S.me.username, nama:S.me.nama, fungsi:S.me.fungsi, jadwal:j, masuk:rec, status:statusMasuk(jam,j)});
+      const {ref,sesi}=await nextSession(tgl);
+      await ref.set({...base, tanggal:tgl, sesi, masuk:rec, status:statusMasuk(jam,j)});
+    } else if(F.target.id){
+      const ref=S.db.doc("absensi/"+F.target.id), ex=await ref.get(), d=ex.exists?ex.data():null;
+      if(d?.pulang){ closeSheet(); return toast("Sesi ini sudah absen pulang."); }
+      const sp=statusPulang(now, j, F.target.key);
+      await ref.update({pulang:rec, statusPulang:sp, ...(d?.jadwal?{}:{jadwal:j})});
     } else {
-      const key=F.target.key, ref=S.db.doc("absensi/"+key+"_"+S.me.uid);
-      const ex=await ref.get(), d=ex.exists?ex.data():null;
-      if(d?.pulang){ closeSheet(); return toast("Absen pulang untuk catatan ini sudah ada."); }
-      const sp=statusPulang(now, j, d?.masuk ? key : null);
-      if(d) await ref.update({pulang:rec, statusPulang:sp, ...(d.jadwal?{}:{jadwal:j})});
-      else await ref.set({tanggal:key, uid:S.me.uid, username:S.me.username, nama:S.me.nama, fungsi:S.me.fungsi, jadwal:j, pulang:rec, statusPulang:sp, status:""});
+      const {ref,sesi}=await nextSession(tgl);
+      await ref.set({...base, tanggal:tgl, sesi, pulang:rec, statusPulang:statusPulang(now, j, null), status:""});
     }
     $("#sheetBody").innerHTML=`<div class="stack" style="align-items:center;text-align:center;padding:26px 0"><span style="color:var(--ok)">${I.check.replace('width="40" height="40"','width="72" height="72"')}</span>
       <h2 style="font-size:22px">Absen ${F.jenis} tercatat</h2><p class="mono" style="font-size:30px;font-weight:700">${jam.slice(0,5)}</p><span class="premis" style="${rec.dalamRadius?'':'background:var(--bad-soft);color:var(--bad)'}">${I.bldg}${esc(rec.premisNama)}</span><p class="small muted">${esc(jadwalText(j))}</p><p class="muted">${longDate(now)}</p>
@@ -827,10 +862,15 @@ async function doExport(kind){
   let rows;
   try{ const q=await S.db.collection("absensi").where("tanggal",">=",from).where("tanggal","<=",to).get(); rows=q.docs.map(d=>d.data()); }
   catch(e){ return toast("Gagal mengambil data."); }
-  if(!rows.length) return toast("Tidak ada data pada rentang ini.");
+  const izinRows=[];
+  for(const z of (S.izin||[])) for(const d of eachDay(z.mulai,z.selesai)) if(d>=from && d<=to) izinRows.push(z.jenis==="cuti"
+    ? [d,"-",z.nama,z.fungsi,z.username||"","","Cuti tahunan","","","","","","","","","","","",z.alasan||""]
+    : [d,"-",z.nama,z.fungsi,z.username||"","","Sakit / MC","","","","","","","","","","","",(z.alasan||"")+(z.berkas?` (surat: ${z.berkas.nama})`:"")]);
+  if(!rows.length && !izinRows.length) return toast("Tidak ada data pada rentang ini.");
   rows.sort((a,b)=>a.tanggal.localeCompare(b.tanggal)||((a.masuk||a.pulang)?.jam||"").localeCompare((b.masuk||b.pulang)?.jam||""));
-  const head=["Tanggal","Nama","Fungsi/Bagian","Username","Jadwal","Kelengkapan","Jam Masuk","Status Masuk","Premis Masuk","Koordinat Masuk","Jam Pulang","Status Pulang","Premis Pulang","Koordinat Pulang","Jam Kerja","Jam Kerja (desimal)","Mode Lokasi","Keterangan"];
-  const data=rows.map(r=>{ const m=lengkap(r)?durMin(r.masuk.ts,r.pulang.ts):null; return [r.tanggal,r.nama,r.fungsi,r.username,r.jadwal?jadwalText(r.jadwal):"",lengkap(r)?"Lengkap":(r.masuk?"Tidak lengkap (tanpa pulang)":"Tidak lengkap (tanpa masuk)"),r.masuk?.jam||"",r.status||"",r.masuk?premisName(r.masuk):"",r.masuk?`${r.masuk.lat}, ${r.masuk.lng}`:"",r.pulang?.jam||"",r.statusPulang||"",r.pulang?premisName(r.pulang):"",r.pulang?`${r.pulang.lat}, ${r.pulang.lng}`:"",m==null?"":fmtDur(m),m==null?"":(m/60).toFixed(2),[r.masuk,r.pulang].some(x=>x?.mode==="demo")?"Demo":"GPS",[r.masuk?.keterangan,r.pulang?.keterangan].filter(Boolean).join(" / ")]; });
+  const head=["Tanggal","Sesi","Nama","Fungsi/Bagian","Username","Jadwal","Kelengkapan","Jam Masuk","Status Masuk","Premis Masuk","Koordinat Masuk","Jam Pulang","Status Pulang","Premis Pulang","Koordinat Pulang","Jam Kerja","Jam Kerja (desimal)","Mode Lokasi","Keterangan"];
+  const data=rows.map(r=>{ const m=lengkap(r)?durMin(r.masuk.ts,r.pulang.ts):null; return [r.tanggal,r.sesi||1,r.nama,r.fungsi,r.username,r.jadwal?jadwalText(r.jadwal):"",lengkap(r)?"Lengkap":(r.masuk?"Tidak lengkap (tanpa pulang)":"Tidak lengkap (tanpa masuk)"),r.masuk?.jam||"",r.status||"",r.masuk?premisName(r.masuk):"",r.masuk?`${r.masuk.lat}, ${r.masuk.lng}`:"",r.pulang?.jam||"",r.statusPulang||"",r.pulang?premisName(r.pulang):"",r.pulang?`${r.pulang.lat}, ${r.pulang.lng}`:"",m==null?"":fmtDur(m),m==null?"":(m/60).toFixed(2),[r.masuk,r.pulang].some(x=>x?.mode==="demo")?"Demo":"GPS",[r.masuk?.keterangan,r.pulang?.keterangan].filter(Boolean).join(" / ")]; });
+  data.push(...izinRows); data.sort((a,b)=>String(a[0]).localeCompare(String(b[0])));
   if(kind==="copy"){
     const tsv=[head,...data].map(r=>r.map(v=>String(v).replace(/[\t\n]/g," ")).join("\t")).join("\n");
     try{ await navigator.clipboard.writeText(tsv); toast(`${rows.length} baris disalin. Tempel di Google Sheets.`); }
@@ -946,3 +986,165 @@ function installHint(){
 document.addEventListener("click", async e => {
   if (e.target.closest?.("#installBtn") && installEvt) { installEvt.prompt(); try{ await installEvt.userChoice; }catch(_){} installEvt=null; render(); }
 });
+
+
+/* ===================== Cuti, izin sakit/MC & kalender ===================== */
+const JENIS_IZIN = { cuti:"Cuti tahunan", sakit:"Sakit / MC" };
+const MAX_BERKAS = 25*1024*1024, POTONGAN = 900*1000;
+function eachDay(a,b){ const out=[]; let d=new Date(a+"T12:00:00+08:00"); const end=new Date(b+"T12:00:00+08:00"); while(d<=end && out.length<400){ out.push(dateKey(d)); d=new Date(d.getTime()+86400000); } return out; }
+function izinOn(day, uid){ return (S.izin||[]).find(z=>z.uid===uid && z.mulai<=day && z.selesai>=day) || null; }
+const fmtTgl = k => new Date(k+"T12:00:00+08:00").toLocaleDateString("id-ID",{timeZone:TZ,day:"numeric",month:"short",year:"numeric"});
+const rentang = z => z.mulai===z.selesai ? fmtTgl(z.mulai) : `${fmtTgl(z.mulai)} – ${fmtTgl(z.selesai)}`;
+function izinBanner(z){
+  const cuti=z.jenis==="cuti";
+  return `<div class="card stack izin-banner ${cuti?'cuti':'sakit'}"><div class="row" style="gap:10px">${I.cal.replace('<svg ','<svg width="26" height="26" ')}<div><b>${cuti?'Kamu sedang cuti tahunan':'Hari ini tercatat izin sakit / MC'}</b><p class="small">${esc(rentang(z))}${z.alasan?` · ${esc(z.alasan)}`:''}</p></div></div>
+    <p class="small">${cuti?'Absen masuk dan pulang dinonaktifkan selama cuti. Selamat beristirahat.':'Kalau sudah kembali bekerja, kamu tetap bisa absen.'}</p></div>`;
+}
+function izinRow(z, admin){
+  return `<div class="item"><span class="chk" style="background:${z.jenis==='cuti'?'var(--bad)':'var(--warn)'};color:#fff">${I.cal.replace('<svg ','<svg width="15" height="15" ')}</span>
+    <div class="grow"><div class="name">${admin?esc(z.nama):esc(JENIS_IZIN[z.jenis])}</div><div class="sub">${admin?esc(JENIS_IZIN[z.jenis])+' · ':''}${esc(rentang(z))}</div>${z.alasan?`<div class="sub">${esc(z.alasan)}</div>`:''}
+    <div class="row wrap" style="gap:6px;margin-top:6px">${z.berkas?`<button class="btn ghost" style="padding:6px 12px;font-size:12.5px" data-berkas="${esc(z.berkas.id)}" data-nama="${esc(z.berkas.nama)}">${I.clip} Lihat surat</button>`:''}
+    ${(admin || z.mulai>S.dayKey) ? `<button class="btn danger" style="padding:6px 12px;font-size:12.5px" data-hapusizin="${esc(z._id)}">${admin?'Hapus':'Batalkan'}</button>`:''}</div></div></div>`;
+}
+function izinListCard(list, admin){
+  const l=[...list].sort((a,b)=>b.mulai.localeCompare(a.mulai)).slice(0,12);
+  return `<div class="card stack"><div class="row between"><h3 style="font-size:16px">Cuti & izin</h3>${admin?'':`<button class="btn ghost" id="izinBtn" style="padding:8px 14px">+ Ajukan</button>`}</div>
+    ${l.length?`<div class="list">${l.map(z=>izinRow(z,admin)).join("")}</div>`:`<p class="small muted">Belum ada cuti atau izin.</p>`}</div>`;
+}
+
+/* Kalender bulanan: blok merah = cuti, blok kuning = sakit/MC, titik hijau = hadir lengkap, titik merah = tidak lengkap */
+function shiftMonth(ym, d){ const [y,m]=ym.split("-").map(Number); const t=new Date(Date.UTC(y,m-1+d,1)); return t.toISOString().slice(0,7); }
+function calendarCard(recs, izin, title, extra=""){
+  const ym=S.calMonth||dateKey().slice(0,7), [y,m]=ym.split("-").map(Number);
+  const first=new Date(Date.UTC(y,m-1,1)), days=new Date(Date.UTC(y,m,0)).getUTCDate(), lead=(first.getUTCDay()+6)%7;
+  const byDay={};
+  for(const r of recs){ const k=r.tanggal; if(!k.startsWith(ym)) continue; byDay[k]=byDay[k]||{ok:0,no:0}; lengkap(r)?byDay[k].ok++:byDay[k].no++; }
+  const izinDay={};
+  for(const z of izin) for(const d of eachDay(z.mulai,z.selesai)) if(d.startsWith(ym)) (izinDay[d]=izinDay[d]||[]).push(z);
+  const cells=[]; for(let i=0;i<lead;i++) cells.push('<div class="cal-d empty"></div>');
+  for(let d=1; d<=days; d++){
+    const k=`${ym}-${String(d).padStart(2,"0")}`, z=izinDay[k], r=byDay[k];
+    const cls = z ? (z.some(x=>x.jenis==="cuti")?"cuti":"sakit") : "";
+    const tip = z ? z.map(x=>`${x.nama?x.nama+": ":""}${JENIS_IZIN[x.jenis]}`).join(", ") : r ? (r.no?"Ada absen tidak lengkap":"Hadir") : "";
+    cells.push(`<div class="cal-d ${cls} ${k===S.dayKey?'today':''}" title="${esc(tip)}"><span>${d}</span>${z&&z.length>1?`<small>${z.length}</small>`:''}${!z&&r?`<i class="dot ${r.no?'no':'ok'}"></i>`:''}</div>`);
+  }
+  const bulan=new Date(Date.UTC(y,m-1,15)).toLocaleDateString("id-ID",{month:"long",year:"numeric",timeZone:"UTC"});
+  return `<div class="card stack"><div class="row between"><h3 style="font-size:16px">${esc(title)}</h3>
+      <div class="row" style="gap:6px"><button class="btn ghost cal-nav" data-cal="-1" aria-label="Bulan sebelumnya">‹</button><b style="min-width:118px;text-align:center;font-size:14px">${esc(bulan)}</b><button class="btn ghost cal-nav" data-cal="1" aria-label="Bulan berikutnya">›</button></div></div>
+    ${extra}
+    <div class="cal"><div class="cal-h">Sen</div><div class="cal-h">Sel</div><div class="cal-h">Rab</div><div class="cal-h">Kam</div><div class="cal-h">Jum</div><div class="cal-h">Sab</div><div class="cal-h">Min</div>${cells.join("")}</div>
+    <div class="row wrap small muted" style="gap:12px"><span><i class="lg cuti"></i>Cuti</span><span><i class="lg sakit"></i>Sakit/MC</span><span><i class="dot ok"></i> Hadir</span><span><i class="dot no"></i> Tidak lengkap</span></div></div>`;
+}
+async function loadKalAdmin(){
+  const ym=S.calMonth||dateKey().slice(0,7); S.kalRecs=null;
+  try{ const q=await S.db.collection("absensi").where("tanggal",">=",ym+"-01").where("tanggal","<=",ym+"-31").get(); S.kalRecs=q.docs.map(x=>x.data()); }catch(e){ S.kalRecs=[]; }
+  refresh("kal");
+}
+function viewKalenderAdmin(){
+  const staf=S.staff.filter(s=>s.role!=="admin"), sel=S.calStaff||"";
+  const recs=(S.kalRecs||[]).filter(r=>!sel||r.uid===sel), izin=(S.izin||[]).filter(z=>!sel||z.uid===sel);
+  const ym=S.calMonth||dateKey().slice(0,7);
+  const izinBulan=izin.filter(z=>z.mulai.slice(0,7)<=ym && z.selesai.slice(0,7)>=ym);
+  const pilih=`<label class="f">Tampilkan<select class="input" id="calStaff"><option value="">Semua staf</option>${staf.map(s=>`<option value="${esc(s.uid)}" ${s.uid===sel?'selected':''}>${esc(s.nama)}</option>`).join("")}</select></label>`;
+  return `<div><span class="eyebrow">Kalender</span><h2 style="font-size:24px">Kehadiran & cuti</h2></div>
+    ${S.kalRecs===null?'<p class="small muted">Memuat data bulan ini…</p>':''}
+    ${calendarCard(sel?recs:[], izin, sel?"Kalender staf":"Cuti & izin semua staf", pilih)}
+    <div class="card stack"><h3 style="font-size:16px">Cuti & izin bulan ini</h3>${izinBulan.length?`<div class="list">${izinBulan.sort((a,b)=>a.mulai.localeCompare(b.mulai)).map(z=>izinRow(z,true)).join("")}</div>`:'<p class="small muted">Tidak ada cuti atau izin di bulan ini.</p>'}</div>`;
+}
+
+/* Form pengajuan: cuti tahunan atau sakit/MC dengan alasan dan surat (maks. 25 MB) */
+function openIzinForm(){
+  const today=dateKey();
+  openSheet(`<span class="eyebrow">Tidak masuk kerja</span><h2 style="font-size:22px;margin-top:4px">Ajukan cuti / izin sakit</h2>
+    <form class="stack" id="izf" style="margin-top:14px">
+      <div class="seg" role="radiogroup"><button type="button" class="on" data-jenis="cuti" aria-pressed="true">Cuti tahunan</button><button type="button" data-jenis="sakit" aria-pressed="false">Sakit / MC</button></div>
+      <div class="grid2"><label class="f">Mulai<input type="date" class="input" id="izMulai" value="${today}"></label><label class="f">Sampai<input type="date" class="input" id="izSelesai" value="${today}"></label></div>
+      <label class="f"><span id="izAlasanLbl">Keterangan (opsional)</span><textarea class="input" id="izAlasan" rows="3" placeholder="contoh: Pulang kampung ke Jakarta"></textarea></label>
+      <label class="f"><span id="izFileLbl">Lampiran (opsional)</span>
+        <input type="file" class="input" id="izFile" accept="image/*,application/pdf,.pdf,.doc,.docx,.heic,.heif">
+        <span class="small muted" style="font-weight:500">JPG, PNG, PDF, atau dokumen lain. Maksimal 25 MB.</span></label>
+      <div id="izProg" hidden><div class="prog"><i id="izBar"></i></div><p class="small muted" id="izProgTxt"></p></div>
+      <p id="izErr" class="small" style="color:var(--bad);font-weight:600" hidden></p>
+      <button class="cta" type="submit" id="izBtn">Kirim pengajuan</button>
+      <button type="button" class="btn block" id="izCancel">Batal</button>
+    </form>`);
+  let jenis="cuti";
+  const setJenis=j=>{ jenis=j; document.querySelectorAll("[data-jenis]").forEach(b=>{ const on=b.dataset.jenis===j; b.classList.toggle("on",on); b.setAttribute("aria-pressed",on); });
+    $("#izAlasanLbl").textContent = j==="sakit" ? "Alasan tidak masuk kerja (wajib)" : "Keterangan (opsional)";
+    $("#izAlasan").placeholder = j==="sakit" ? "contoh: Demam, istirahat sesuai surat dokter" : "contoh: Pulang kampung ke Jakarta";
+    $("#izFileLbl").textContent = j==="sakit" ? "Surat keterangan sakit / MC (wajib)" : "Lampiran (opsional)"; };
+  document.querySelectorAll("[data-jenis]").forEach(b=>b.onclick=()=>setJenis(b.dataset.jenis));
+  $("#izCancel").onclick=closeSheet;
+  $("#izf").onsubmit=async e=>{
+    e.preventDefault();
+    const err=$("#izErr"), btn=$("#izBtn"), fail=m=>{ err.textContent=m; err.hidden=false; btn.disabled=false; btn.textContent="Kirim pengajuan"; };
+    err.hidden=true;
+    const mulai=$("#izMulai").value, selesai=$("#izSelesai").value, alasan=$("#izAlasan").value.trim(), file=$("#izFile").files?.[0];
+    if(!mulai||!selesai) return fail("Isi tanggal mulai dan selesai.");
+    if(selesai<mulai) return fail("Tanggal selesai tidak boleh sebelum tanggal mulai.");
+    if(eachDay(mulai,selesai).length>60) return fail("Rentang maksimal 60 hari.");
+    if(jenis==="sakit" && alasan.length<3) return fail("Tulis alasan tidak masuk kerja.");
+    if(jenis==="sakit" && !file) return fail("Lampirkan surat keterangan sakit / MC.");
+    if(file && file.size>MAX_BERKAS) return fail("Ukuran file melebihi 25 MB.");
+    const bentrok=(S.izin||[]).find(z=>z.uid===S.me.uid && z.mulai<=selesai && z.selesai>=mulai);
+    if(bentrok) return fail(`Tanggal itu sudah tercatat ${JENIS_IZIN[bentrok.jenis].toLowerCase()} (${rentang(bentrok)}).`);
+    btn.disabled=true; btn.textContent="Mengirim…";
+    try{
+      let berkas=null;
+      if(file) berkas = await uploadBerkas(file, (done,total)=>{ $("#izProg").hidden=false; $("#izBar").style.width=Math.round(done/total*100)+"%"; $("#izProgTxt").textContent=`Mengunggah surat… ${Math.round(done/total*100)}%`; });
+      await S.db.collection("izin").add({ uid:S.me.uid, nama:S.me.nama, fungsi:S.me.fungsi, username:S.me.username, jenis, mulai, selesai, alasan, berkas, dibuat:new Date().toISOString() });
+      closeSheet(); toast(jenis==="cuti"?"Cuti tercatat.":"Izin sakit tercatat."); bell();
+    }catch(ex){ fail(ex?.message && !/permission/i.test(ex.message) ? ex.message : "Gagal mengirim. Periksa koneksi lalu coba lagi."); }
+  };
+}
+
+/* Surat disimpan di Firestore dalam potongan ±900 KB (Firebase Storage butuh akun penagihan) */
+async function kecilkanFoto(file){
+  if(!/^image\/(jpeg|png|webp)$/.test(file.type) || file.size<1.5*1024*1024) return file;
+  try{
+    const url=URL.createObjectURL(file), img=await loadImg(url); URL.revokeObjectURL(url);
+    const sc=Math.min(1, 2000/Math.max(img.width,img.height)), c=document.createElement("canvas");
+    c.width=Math.round(img.width*sc); c.height=Math.round(img.height*sc); c.getContext("2d").drawImage(img,0,0,c.width,c.height);
+    const blob=await new Promise(r=>c.toBlob(r,"image/jpeg",.85));
+    return blob && blob.size<file.size ? new File([blob], file.name.replace(/\.\w+$/,"")+".jpg", {type:"image/jpeg"}) : file;
+  }catch(e){ return file; }
+}
+async function uploadBerkas(file, onProgress){
+  const f=await kecilkanFoto(file), buf=new Uint8Array(await f.arrayBuffer());
+  const n=Math.max(1, Math.ceil(buf.length/POTONGAN)), ref=S.db.collection("berkas").doc();
+  await ref.set({ uid:S.me.uid, nama:f.name, tipe:f.type||"application/octet-stream", ukuran:buf.length, potongan:n, dibuat:new Date().toISOString() });
+  for(let i=0;i<n;i++){
+    await ref.collection("potongan").doc(String(i).padStart(3,"0")).set({ i, data: firebase.firestore.Blob.fromUint8Array(buf.subarray(i*POTONGAN,(i+1)*POTONGAN)) });
+    onProgress && onProgress(i+1, n);
+  }
+  return { id:ref.id, nama:f.name, tipe:f.type||"", ukuran:buf.length };
+}
+async function ambilBerkas(id){
+  const meta=(await S.db.doc("berkas/"+id).get()).data();
+  const q=await S.db.collection("berkas/"+id+"/potongan").get();
+  const parts=q.docs.map(d=>d.data()).sort((a,b)=>a.i-b.i).map(p=>p.data.toUint8Array());
+  return { blob:new Blob(parts,{type:meta.tipe}), meta };
+}
+async function openBerkas(id, nama){
+  openSheet(`<span class="eyebrow">Lampiran</span><h2 style="font-size:20px;margin-top:4px;word-break:break-word">${esc(nama||"Surat")}</h2><div id="bkBody" style="margin-top:14px"><p class="muted">Memuat file…</p></div><button class="btn block" id="bkClose" style="margin-top:12px">Tutup</button>`);
+  $("#bkClose").onclick=closeSheet;
+  try{
+    const {blob,meta}=await ambilBerkas(id), url=URL.createObjectURL(blob);
+    if(!$("#bkBody")) return;
+    const besar=(meta.ukuran/1024/1024).toFixed(1);
+    $("#bkBody").innerHTML = (meta.tipe.startsWith("image/") ? `<img src="${url}" alt="${esc(meta.nama)}" style="width:100%;border-radius:16px;display:block">` : `<div class="card flat"><p><b>${esc(meta.nama)}</b></p><p class="small muted">${esc(meta.tipe||"file")} · ${besar} MB</p></div>`)
+      + `<div class="stack" style="margin-top:12px"><a class="btn primary block" href="${url}" target="_blank" rel="noopener" download="${esc(meta.nama)}">${I.dl} Buka / unduh file</a></div>`;
+  }catch(e){ if($("#bkBody")) $("#bkBody").innerHTML=`<p class="small" style="color:var(--bad)">File tidak bisa dimuat. Periksa koneksi atau hak akses.</p>`; }
+}
+async function hapusIzin(id){
+  const z=(S.izin||[]).find(x=>x._id===id); if(!z) return;
+  openSheet(`<h2 style="font-size:20px">${S.me.role==="admin"?'Hapus':'Batalkan'} ${esc(JENIS_IZIN[z.jenis].toLowerCase())}?</h2><p class="small muted" style="margin:6px 0 14px">${esc(z.nama)} · ${esc(rentang(z))}</p>
+    <div class="grid2"><button class="btn" id="hzNo">Tidak</button><button class="btn danger" id="hzYes">Ya, hapus</button></div>`);
+  $("#hzNo").onclick=closeSheet;
+  $("#hzYes").onclick=async()=>{
+    try{
+      if(z.berkas?.id){ const q=await S.db.collection("berkas/"+z.berkas.id+"/potongan").get(); for(const d of q.docs) await d.ref.delete(); await S.db.doc("berkas/"+z.berkas.id).delete(); }
+      await S.db.doc("izin/"+id).delete(); closeSheet(); toast("Dihapus.");
+    }catch(e){ toast("Gagal menghapus."); }
+  };
+}
