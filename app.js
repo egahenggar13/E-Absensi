@@ -45,7 +45,7 @@ function durText(r){
   return "—";
 }
 const premisName = x => x?.premisNama || (x?.dalamRadius===false ? "Di luar premis" : (x ? "KBRI Kuala Lumpur" : ""));
-const FUNGSI = ["Petugas Keamanan / Security","Staff Keuangan","Komunikasi","BPKRT","Ekonomi","Politik","Pertahanan","Pensosbud","Pendidikan","Staff Dubes dan DCM","Konsuler","Perhubungan","Riset","Perdagangan","Imigrasi","Hukum","Ketenagakerjaan"];
+const FUNGSI = ["Petugas Keamanan / Security","Staff Keuangan","Komunikasi","BPKRT","Ekonomi","Politik","Pertahanan","Pensosbud","Pendidikan","Staff Dubes dan DCM","Konsuler","Perhubungan","Riset","Perdagangan","Imigrasi","Hukum","Ketenagakerjaan","Atpol"];
 
 const $ = (s, el=document) => el.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
