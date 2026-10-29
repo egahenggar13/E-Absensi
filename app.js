@@ -18,7 +18,9 @@ const JADWAL_INFO = {
 const DEFAULT_JADWAL = { umum:{mulai:"09:00",selesai:"17:00"}, sikl:{mulai:"08:00",selesai:"15:30"}, pagi:{mulai:"08:00",selesai:"16:30"}, lembur:{mulai:"08:00",selesai:"20:00"}, malam:{mulai:"20:00",selesai:"08:00"} };
 const SHIFT_IDS = ["pagi","lembur","malam"];
 const DEFAULT_CFG = { nama:"KBRI Kuala Lumpur", premis:DEFAULT_PREMIS, jadwal:DEFAULT_JADWAL, toleransi:15 };
-function normCfg(d){ const c={...DEFAULT_CFG,...d}; if(!Array.isArray(c.premis)||!c.premis.length) c.premis=DEFAULT_PREMIS;
+/* Tanggal merah KBRI KL (libur Indonesia & Malaysia). 2026: SKB 3 Menteri + cuti umum WP Kuala Lumpur. 2027: Edaran KBRI KL No. 1615/KP/09/2026/02. Admin bisa mengubahnya di Pengaturan. */
+const DEFAULT_LIBUR = {"2026-01-01": "Tahun Baru Masehi (Indonesia & Malaysia)", "2026-01-16": "Isra Mikraj (Indonesia)", "2026-02-01": "Hari Wilayah Persekutuan & Thaipusam (Malaysia)", "2026-02-02": "Pengganti Hari Wilayah Persekutuan (Malaysia)", "2026-02-03": "Pengganti Thaipusam (Malaysia)", "2026-02-16": "Cuti Bersama Imlek (Indonesia)", "2026-02-17": "Tahun Baru Imlek (Indonesia & Malaysia)", "2026-02-18": "Tahun Baharu Cina hari kedua (Malaysia)", "2026-03-07": "Nuzul Al-Quran (Malaysia)", "2026-03-18": "Cuti Bersama Nyepi (Indonesia)", "2026-03-19": "Hari Suci Nyepi (Indonesia)", "2026-03-20": "Cuti Bersama Idulfitri (Indonesia)", "2026-03-21": "Idulfitri / Hari Raya Puasa (Indonesia & Malaysia)", "2026-03-22": "Idulfitri / Hari Raya Puasa (Indonesia & Malaysia)", "2026-03-23": "Cuti Bersama Idulfitri (Indonesia) / Pengganti Hari Raya (Malaysia)", "2026-03-24": "Cuti Bersama Idulfitri (Indonesia)", "2026-04-03": "Wafat Yesus Kristus (Indonesia)", "2026-04-05": "Paskah (Indonesia)", "2026-05-01": "Hari Buruh / Hari Pekerja (Indonesia & Malaysia)", "2026-05-14": "Kenaikan Yesus Kristus (Indonesia)", "2026-05-15": "Cuti Bersama Kenaikan Yesus Kristus (Indonesia)", "2026-05-27": "Iduladha / Hari Raya Haji (Indonesia & Malaysia)", "2026-05-28": "Cuti Bersama Iduladha (Indonesia)", "2026-05-31": "Waisak / Hari Wesak (Indonesia & Malaysia)", "2026-06-01": "Hari Lahir Pancasila (Indonesia) / Hari Keputeraan YDP Agong (Malaysia)", "2026-06-16": "1 Muharam (Indonesia)", "2026-06-17": "Awal Muharam (Malaysia)", "2026-08-17": "Proklamasi Kemerdekaan (Indonesia)", "2026-08-25": "Maulid Nabi / Maulidur Rasul (Indonesia & Malaysia)", "2026-08-31": "Hari Kebangsaan (Malaysia)", "2026-09-16": "Hari Malaysia (Malaysia)", "2026-11-08": "Deepavali (Malaysia)", "2026-11-09": "Pengganti Deepavali (Malaysia)", "2026-12-24": "Cuti Bersama Natal (Indonesia)", "2026-12-25": "Natal / Hari Krismas (Indonesia & Malaysia)", "2027-01-01": "Tahun Baru Masehi (Indonesia & Malaysia)", "2027-01-05": "Isra Mikraj (Indonesia)", "2027-01-22": "Thaipusam (Malaysia)", "2027-02-01": "Hari Wilayah Persekutuan (Malaysia)", "2027-02-05": "Cuti Bersama Imlek (Indonesia)", "2027-02-06": "Tahun Baru Imlek (Indonesia & Malaysia)", "2027-02-07": "Tahun Baharu Cina hari kedua (Malaysia)", "2027-02-08": "Pengganti Tahun Baharu Cina hari kedua (Malaysia)", "2027-02-24": "Nuzul Al-Quran (Malaysia)", "2027-03-08": "Hari Suci Nyepi (Indonesia)", "2027-03-09": "Cuti Bersama Idulfitri (Indonesia)", "2027-03-10": "Idulfitri / Hari Raya Puasa (Indonesia & Malaysia)", "2027-03-11": "Idulfitri / Hari Raya Puasa (Indonesia & Malaysia)", "2027-03-12": "Cuti Bersama Idulfitri (Indonesia)", "2027-03-15": "Cuti Bersama Idulfitri (Indonesia)", "2027-03-25": "Cuti Bersama Wafat Yesus Kristus (Indonesia)", "2027-03-26": "Wafat Yesus Kristus (Indonesia)", "2027-03-28": "Paskah (Indonesia)", "2027-05-01": "Hari Buruh / Hari Pekerja (Indonesia & Malaysia)", "2027-05-06": "Kenaikan Yesus Kristus (Indonesia)", "2027-05-17": "Iduladha / Hari Raya Qurban (Indonesia & Malaysia)", "2027-05-18": "Cuti Bersama Iduladha (Indonesia)", "2027-05-19": "Cuti Bersama Waisak (Indonesia)", "2027-05-20": "Waisak / Hari Wesak (Indonesia & Malaysia)", "2027-06-01": "Hari Lahir Pancasila (Indonesia)", "2027-06-06": "1 Muharam / Awal Muharam (Indonesia & Malaysia)", "2027-06-07": "Pengganti Awal Muharam (Malaysia)", "2027-08-15": "Maulid Nabi / Maulidur Rasul (Indonesia & Malaysia)", "2027-08-16": "Pengganti Maulidur Rasul (Malaysia)", "2027-08-17": "Proklamasi Kemerdekaan (Indonesia)", "2027-08-31": "Hari Kebangsaan (Malaysia)", "2027-09-16": "Hari Malaysia (Malaysia)", "2027-10-28": "Deepavali (Malaysia)", "2027-12-24": "Cuti Bersama Natal (Indonesia)", "2027-12-25": "Natal / Hari Krismas (Indonesia & Malaysia)", "2027-12-26": "Isra Mikraj (Indonesia)"};
+function normCfg(d){ const c={...DEFAULT_CFG,...d}; c.libur = (d && d.libur && typeof d.libur==="object") ? d.libur : DEFAULT_LIBUR; if(!Array.isArray(c.premis)||!c.premis.length) c.premis=DEFAULT_PREMIS;
   c.jadwal={...DEFAULT_JADWAL,...(d?.jadwal||{})}; ["lat","lng","radius","alamat","jamMasuk","jamPulang"].forEach(k=>delete c[k]); return c; }
 const isSecurity = f => /keamanan|security|satpam/i.test(String(f||""));
 function jadwalById(id){ const j=S.cfg.jadwal[id]||DEFAULT_JADWAL[id]; return { id, nama:JADWAL_INFO[id].nama, mulai:j.mulai, selesai:j.selesai, lintas: toMin(j.selesai)<=toMin(j.mulai) }; }
@@ -283,11 +285,18 @@ function activeRec(){
   if (y && !t.length) return { rec:y, key:y.tanggal, kemarin:true, sesiCount:0 };
   return { rec:t[t.length-1]||null, key:S.dayKey, kemarin:false, sesiCount:t.length };
 }
+/* Hari libur di KL: Sabtu, Minggu, atau tanggal merah. Absen tetap dibuka (lembur / jadwal jaga Security). */
+function hariLibur(k){ const h=new Date(k+"T12:00:00+08:00").toLocaleDateString("en-US",{timeZone:TZ,weekday:"short"}); return h==="Sat"||h==="Sun"||!!(S.cfg.libur||{})[k]; }
+function namaLibur(k){ const lib=(S.cfg.libur||{})[k]; if(lib) return lib; const h=new Date(k+"T12:00:00+08:00").toLocaleDateString("id-ID",{timeZone:TZ,weekday:"long"}); return h==="Sabtu"||h==="Minggu" ? `Hari ${h}` : ""; }
+const LEMBUR = "Lembur hari libur";
+/* Staf non-Security yang absen di hari libur dicatat sebagai lembur, bukan terlambat / pulang cepat */
+function sMasuk(jam, j, tgl){ return !isSecurity(S.me.fungsi) && hariLibur(tgl) ? LEMBUR : statusMasuk(jam, j); }
+function sPulang(now, j, startKey, tgl){ return !isSecurity(S.me.fungsi) && hariLibur(startKey||tgl) ? LEMBUR : statusPulang(now, j, startKey); }
+function pillStatus(v){ return `<span class="pill ${v==="Terlambat"||v==="Pulang cepat"?'p-warn':v===LEMBUR?'p-info':'p-ok'}">${esc(v)}</span>`; }
 function pillFor(rec){
   if (!rec || (!rec.masuk && !rec.pulang)) return '<span class="pill p-mute">Belum absen</span>';
   if (!rec.masuk) return '<span class="pill p-bad">Tanpa absen masuk</span>';
-  const late = rec.status === "Terlambat";
-  let h = `<span class="pill ${late?'p-warn':'p-ok'}">${esc(rec.status)}</span>`;
+  let h = pillStatus(rec.status);
   if (rec.masuk.dalamRadius === false) h += ' <span class="pill p-bad">Luar premis</span>';
   return h;
 }
@@ -372,10 +381,10 @@ function viewHome(){
   </section>
   <div class="tiles">
     <div class="tile"><span class="eyebrow">Masuk</span><span class="t ${t?.masuk?'':'empty'}">${t?.masuk? esc(t.masuk.jam.slice(0,5)) : '--:--'}</span>${t?.masuk? pillFor(t)+tilePremis(t.masuk) : '<span class="small muted">Belum tercatat</span>'}</div>
-    <div class="tile"><span class="eyebrow">Pulang</span><span class="t ${t?.pulang?'':'empty'}">${t?.pulang? esc(t.pulang.jam.slice(0,5)) : '--:--'}</span>${t?.pulang? (t.statusPulang==='Pulang cepat'?'<span class="pill p-warn">Pulang cepat</span>':'<span class="pill p-ok">Sesuai jadwal</span>')+tilePremis(t.pulang) : '<span class="small muted">Belum tercatat</span>'}</div>
+    <div class="tile"><span class="eyebrow">Pulang</span><span class="t ${t?.pulang?'':'empty'}">${t?.pulang? esc(t.pulang.jam.slice(0,5)) : '--:--'}</span>${t?.pulang? pillStatus(t.statusPulang||'Sesuai jadwal')+tilePremis(t.pulang) : '<span class="small muted">Belum tercatat</span>'}</div>
   </div>
   ${durBox}
-  ${izinHariIni ? izinBanner(izinHariIni) : ''}
+  ${izinHariIni ? izinBanner(izinHariIni) : (hariLibur(S.dayKey) ? `<div class="card flat stack libur-info"><div class="row" style="gap:10px">${I.cal.replace('<svg ','<svg width="24" height="24" ')}<div><b>Hari libur: ${esc(namaLibur(S.dayKey))}</b><p class="small">${isSecurity(S.me.fungsi)?'Absen tetap berjalan sesuai jadwal jaga.':'Absen tetap bisa dipakai untuk lembur atau tugas mendadak, dan tercatat sebagai lembur hari libur.'}</p></div></div></div>` : '')}
   ${izinHariIni?.jenis==="cuti" ? '' : cta}
   <button class="btn ghost block" id="izinBtn">${I.cal.replace('<svg ','<svg width="18" height="18" ')} Ajukan cuti / izin sakit</button>
   <div class="card flat stack" style="gap:8px">
@@ -438,7 +447,8 @@ function viewRekap(){
   const hadir = new Set(S.rekap.filter(r=>r.masuk).map(r=>r.uid)).size, late = S.rekap.filter(r=>r.status==="Terlambat").length, tdk = S.rekap.filter(r=>!lengkap(r)).length;
   const izinHari = (S.izin||[]).filter(z=>z.mulai<=S.rekapDate && z.selesai>=S.rekapDate);
   const izinUid = new Set(izinHari.map(z=>z.uid));
-  const belum = active.filter(s=>!byUser[s.uid] && !izinUid.has(s.uid));
+  const libRekap = hariLibur(S.rekapDate);
+  const belum = active.filter(s=>!byUser[s.uid] && !izinUid.has(s.uid) && (!libRekap || isSecurity(s.fungsi)));
   const rows = [...S.rekap].sort((a,b)=>((a.masuk||a.pulang)?.jam||"").localeCompare((b.masuk||b.pulang)?.jam||""));
   const perPremis = S.cfg.premis.map(p=>({p, n:S.rekap.filter(r=>(r.masuk||r.pulang)?.premisId===p.id || (!(r.masuk||r.pulang)?.premisId && p.id==="kbri" && (r.masuk||r.pulang)?.dalamRadius!==false)).length}));
   const luar = S.rekap.filter(r=>(r.masuk||r.pulang)?.dalamRadius===false).length;
@@ -459,6 +469,7 @@ function viewRekap(){
       <div class="times">${esc(r.masuk?.jam?.slice(0,5)||'--:--')}<br><span class="muted">${esc(r.pulang?.jam?.slice(0,5)||'--:--')}</span></div></div>`).join("")}</div>`
       : `<div class="empty">${I.chart}<p>Belum ada staf yang absen pada tanggal ini.</p></div>`}
   </div>
+  ${libRekap?`<div class="card flat libur-info small"><b>Hari libur: ${esc(namaLibur(S.rekapDate))}.</b> Hanya Petugas Keamanan yang dihitung belum absen; staf lain yang hadir tercatat lembur.</div>`:''}
   ${izinHari.length?`<div class="card stack"><h3 style="font-size:16px">Cuti & izin</h3><div class="list">${izinHari.map(z=>izinRow(z,true)).join("")}</div></div>`:''}
   ${belum.length?`<div class="card stack"><h3 style="font-size:16px">Belum absen</h3><div class="list">${belum.map(s=>`<div class="item"><div class="ini" style="background:var(--surface-2);color:var(--muted)">${esc(initials(s.nama))}</div><div class="grow"><div class="name">${esc(s.nama)}</div><div class="sub">${esc(s.fungsi)}</div></div></div>`).join("")}</div></div>`:''}
   ${exportCard()}`;
@@ -503,9 +514,21 @@ function viewAtur(){
     </div>`).join("")}
     <button class="btn primary" type="submit">Simpan pengaturan</button>
   </form>
+  ${liburCard()}
   ${pwCard()}
   <button class="btn danger block" id="logout">Keluar</button>`;
 }
+function liburCard(){
+  const lib=S.cfg.libur||{}, today=dateKey(), next=Object.keys(lib).filter(k=>k>=today).sort().slice(0,S.liburAll?400:8);
+  const sisa=Object.keys(lib).filter(k=>k>=today).length;
+  return `<div class="card stack"><h3 style="font-size:16px">Tanggal merah</h3>
+    <p class="small muted">Dipakai untuk ucapan "jangan lupa liburan" saat absen pulang sehari sebelumnya, dan ditandai di kalender. Sudah terisi libur Indonesia & Malaysia 2026–2027 sesuai edaran KBRI KL.</p>
+    <div class="list">${next.map(k=>`<div class="item"><div class="grow"><div class="name">${esc(lib[k])}</div><div class="sub">${esc(fmtTgl(k))}</div></div><button class="btn danger" style="padding:6px 12px;font-size:12.5px" data-delLibur="${k}">Hapus</button></div>`).join("") || '<p class="small muted">Belum ada tanggal merah mendatang.</p>'}</div>
+    ${sisa>next.length?`<button class="btn ghost" id="liburAll">Tampilkan semua (${sisa})</button>`:''}
+    <form class="stack" id="liburForm" style="gap:8px"><div class="grid2"><label class="f">Tanggal<input type="date" class="input" id="lbTgl"></label><label class="f">Nama libur<input class="input" id="lbNama" placeholder="contoh: Hari Raya"></label></div>
+      <button class="btn primary" type="submit">Tambah tanggal merah</button></form></div>`;
+}
+async function simpanLibur(map){ try{ await S.db.doc("config/kantor").update({ libur:map }); S.cfg.libur=map; render(); toast("Tanggal merah diperbarui."); }catch(e){ toast("Gagal menyimpan tanggal merah."); } }
 
 /* ---------- Nav ---------- */
 function removeNav(){ $("#nav")?.remove(); }
@@ -538,6 +561,9 @@ function bindView(){
   $("#addStaff") && ($("#addStaff").onclick = ()=>openStaffForm(null));
   document.querySelectorAll("[data-edit]").forEach(b=>b.onclick=()=>openStaffForm(S.staff.find(s=>s.uid===b.dataset.edit)));
   $("#cfgForm") && ($("#cfgForm").onsubmit = saveCfg);
+  $("#liburAll") && ($("#liburAll").onclick = ()=>{ S.liburAll=true; render(); });
+  document.querySelectorAll("[data-dellibur]").forEach(b=>b.onclick=()=>{ const m={...(S.cfg.libur||{})}; delete m[b.dataset.dellibur]; simpanLibur(m); });
+  $("#liburForm") && ($("#liburForm").onsubmit = e=>{ e.preventDefault(); const t=$("#lbTgl").value, n=$("#lbNama").value.trim(); if(!t||!n) return toast("Isi tanggal dan nama libur."); simpanLibur({...(S.cfg.libur||{}), [t]:n}); });
   document.querySelectorAll("[data-here]").forEach(b=>b.onclick=()=>{ const i=b.dataset.here; getPos().then(p=>{ $("#pLa"+i).value=p.coords.latitude.toFixed(6); $("#pLo"+i).value=p.coords.longitude.toFixed(6); toast("Lokasi diisi. Tekan Simpan."); }).catch(()=>toast("Lokasi tidak bisa dibaca di tampilan ini.")); });
 }
 
@@ -566,7 +592,7 @@ async function saveCfg(e){
   const jadwal={};
   for (const id of Object.keys(JADWAL_INFO)){ const fix=v=>{ const t=v.trim().replace(".",":"); const m=t.match(/^(\d{1,2}):?(\d{2})$/); if(!m) return ""; const h=+m[1], mi=+m[2]; return h<24&&mi<60 ? String(h).padStart(2,"0")+":"+m[2] : ""; };
     const m=fix($(`#j_${id}_m`).value), x=fix($(`#j_${id}_s`).value); if(!m||!x) return toast(`Jam ${JADWAL_INFO[id].nama} harus format 24 jam, contoh 08:00.`); if(m===x) return toast(`Jam mulai dan selesai ${JADWAL_INFO[id].nama} tidak boleh sama.`); jadwal[id]={mulai:m,selesai:x}; }
-  const cfg={nama:"KBRI Kuala Lumpur", premis, jadwal, toleransi:isFinite(tol)?tol:0};
+  const cfg={nama:"KBRI Kuala Lumpur", premis, jadwal, toleransi:isFinite(tol)?tol:0, libur:S.cfg.libur||DEFAULT_LIBUR};
   try { await S.db.doc("config/kantor").set(cfg); S.cfg=cfg; toast("Pengaturan disimpan."); render(); } catch(ex){ toast("Gagal menyimpan pengaturan."); }
 }
 
@@ -779,7 +805,7 @@ function stepKonfirmasi(){
   const pick = !fixed && sec && F.pos.premisId!=="sikl";
   if (pick && !F.shift) F.shift = suggestShift(F.jenis);
   F.jadwal = fixed ? tr.jadwal : jadwalFor(S.me.fungsi, F.pos.premisId, F.shift);
-  const st = isIn ? statusMasuk(jam, F.jadwal) : statusPulang(now, F.jadwal, tr?.masuk ? F.target.key : null);
+  const st = isIn ? sMasuk(jam, F.jadwal, dateKey(now)) : sPulang(now, F.jadwal, tr?.masuk ? F.target.key : null, dateKey(now));
   const warn = st==="Terlambat"||st==="Pulang cepat";
   const picker = pick ? `<div class="stack" style="gap:6px;margin-top:14px"><span class="eyebrow">Pilih shift</span>
       <div class="pchoice">${SHIFT_IDS.map(id=>{const j=jadwalById(id);return `<button type="button" class="btn ${F.shift===id?'primary':'ghost'} block" data-shift="${id}" aria-pressed="${F.shift===id}">${esc(j.nama)} <span class="mono" style="opacity:.8">${j.mulai}–${j.selesai}</span></button>`;}).join("")}</div></div>` : '';
@@ -788,7 +814,7 @@ function stepKonfirmasi(){
       <div class="row between"><span class="muted">Waktu</span><b class="mono" style="font-size:22px">${jam}</b></div>
       <div class="row between"><span class="muted">Tanggal</span><b style="text-align:right">${longDate(now)}</b></div>
       <div class="row between"><span class="muted">Jadwal</span><b style="text-align:right">${esc(F.jadwal.nama)}<br><span class="mono small muted">${F.jadwal.mulai}–${F.jadwal.selesai}${F.jadwal.lintas?' (+1 hari)':''}</span></b></div>
-      <div class="row between"><span class="muted">Status</span><span class="pill ${warn?'p-warn':'p-ok'}">${st}</span></div>
+      <div class="row between"><span class="muted">Status</span>${pillStatus(st)}</div>
       <div class="row between"><span class="muted">Premis</span><span class="premis" style="${F.pos.dalamRadius?'':'background:var(--bad-soft);color:var(--bad)'}">${I.bldg}${esc(F.pos.premisNama)}</span></div>
       ${!isIn && tr?.masuk ? `<div class="row between"><span class="muted">Jam kerja</span><b class="mono">${fmtDur(durMin(tr.masuk.ts,now.toISOString()))}</b></div>` : ''}
       ${!isIn && !tr?.masuk ? `<div class="row between"><span class="muted">Catatan</span><span class="pill p-bad">Tanpa absen masuk</span></div>` : ''}
@@ -827,8 +853,29 @@ async function nextSession(tgl){
   }
   throw new Error("Terlalu banyak sesi hari ini.");
 }
+/* Ucapan setelah bel absen pulang (suara bahasa Indonesia bawaan ponsel) */
+function primeSpeech(){ try{ if(!window.speechSynthesis) return; const u=new SpeechSynthesisUtterance(" "); u.volume=0; speechSynthesis.speak(u); }catch(e){} }
+function ucapkan(teks){
+  try{
+    if(!window.speechSynthesis) return;
+    const voices=speechSynthesis.getVoices(), v=voices.find(x=>/^id(-|_|$)/i.test(x.lang)) || voices.find(x=>/indones/i.test(x.name));
+    const u=new SpeechSynthesisUtterance(teks); u.lang="id-ID"; if(v) u.voice=v; u.rate=0.95; u.pitch=1.05; u.volume=1;
+    speechSynthesis.cancel(); speechSynthesis.speak(u);
+  }catch(e){}
+}
+/* Besok libur bila Sabtu/Minggu, tanggal merah, atau staf sedang cuti */
+function besokLibur(now){
+  const besok=new Date(new Date(now).getTime()+86400000), k=dateKey(besok);
+  const hari=besok.toLocaleDateString("en-US",{timeZone:TZ,weekday:"short"});
+  if (hari==="Sat"||hari==="Sun") return true;
+  if ((S.cfg.libur||{})[k]) return true;
+  return izinOn(k, S.me?.uid)?.jenis==="cuti";
+}
+function pesanPulang(now){
+  return besokLibur(now) ? "Selamat beristirahat, dan jangan lupa liburan." : "Selamat beristirahat, dan jangan lupa besok kerja lagi.";
+}
 async function submitAbsen(){
-  unlockAudio();
+  unlockAudio(); if(F.jenis==="pulang") primeSpeech();
   const btn=$("#kSend"); btn.disabled=true; btn.textContent="Mengirim…";
   const now=new Date(), jam=timeStr(now), tgl=dateKey(now), j=F.jadwal;
   const rec={jam, ts:now.toISOString(), ...F.pos, wajah:F.face||null, keterangan:F.ket||""};
@@ -836,21 +883,22 @@ async function submitAbsen(){
     const base={uid:S.me.uid, username:S.me.username, nama:S.me.nama, fungsi:S.me.fungsi, jadwal:j};
     if(F.jenis==="masuk"){
       const {ref,sesi}=await nextSession(tgl);
-      await ref.set({...base, tanggal:tgl, sesi, masuk:rec, status:statusMasuk(jam,j)});
+      await ref.set({...base, tanggal:tgl, sesi, masuk:rec, status:sMasuk(jam,j,tgl)});
     } else if(F.target.id){
       const ref=S.db.doc("absensi/"+F.target.id), ex=await ref.get(), d=ex.exists?ex.data():null;
       if(d?.pulang){ closeSheet(); return toast("Sesi ini sudah absen pulang."); }
-      const sp=statusPulang(now, j, F.target.key);
+      const sp=sPulang(now, j, F.target.key, tgl);
       await ref.update({pulang:rec, statusPulang:sp, ...(d?.jadwal?{}:{jadwal:j})});
     } else {
       const {ref,sesi}=await nextSession(tgl);
-      await ref.set({...base, tanggal:tgl, sesi, pulang:rec, statusPulang:statusPulang(now, j, null), status:""});
+      await ref.set({...base, tanggal:tgl, sesi, pulang:rec, statusPulang:sPulang(now, j, null, tgl), status:""});
     }
     $("#sheetBody").innerHTML=`<div class="stack" style="align-items:center;text-align:center;padding:26px 0"><span style="color:var(--ok)">${I.check.replace('width="40" height="40"','width="72" height="72"')}</span>
       <h2 style="font-size:22px">Absen ${F.jenis} tercatat</h2><p class="mono" style="font-size:30px;font-weight:700">${jam.slice(0,5)}</p><span class="premis" style="${rec.dalamRadius?'':'background:var(--bad-soft);color:var(--bad)'}">${I.bldg}${esc(rec.premisNama)}</span><p class="small muted">${esc(jadwalText(j))}</p><p class="muted">${longDate(now)}</p>
       <button class="cta" id="kDone" style="margin-top:8px">Selesai</button></div>`;
     $("#kDone").onclick=closeSheet;
     bell();
+    if(F.jenis==="pulang") setTimeout(()=>ucapkan(pesanPulang(now)), 1500);
   }catch(ex){ btn.disabled=false; btn.textContent="Coba kirim lagi"; toast("Gagal mengirim. Periksa koneksi lalu coba lagi."); }
 }
 
@@ -1024,8 +1072,9 @@ function calendarCard(recs, izin, title, extra=""){
   const cells=[]; for(let i=0;i<lead;i++) cells.push('<div class="cal-d empty"></div>');
   for(let d=1; d<=days; d++){
     const k=`${ym}-${String(d).padStart(2,"0")}`, z=izinDay[k], r=byDay[k];
-    const cls = z ? (z.some(x=>x.jenis==="cuti")?"cuti":"sakit") : "";
-    const tip = z ? z.map(x=>`${x.nama?x.nama+": ":""}${JENIS_IZIN[x.jenis]}`).join(", ") : r ? (r.no?"Ada absen tidak lengkap":"Hadir") : "";
+    const lib = (S.cfg.libur||{})[k];
+    const cls = z ? (z.some(x=>x.jenis==="cuti")?"cuti":"sakit") : lib ? "libur" : "";
+    const tip = z ? z.map(x=>`${x.nama?x.nama+": ":""}${JENIS_IZIN[x.jenis]}`).join(", ") : lib ? lib : r ? (r.no?"Ada absen tidak lengkap":"Hadir") : "";
     cells.push(`<div class="cal-d ${cls} ${k===S.dayKey?'today':''}" title="${esc(tip)}"><span>${d}</span>${z&&z.length>1?`<small>${z.length}</small>`:''}${!z&&r?`<i class="dot ${r.no?'no':'ok'}"></i>`:''}</div>`);
   }
   const bulan=new Date(Date.UTC(y,m-1,15)).toLocaleDateString("id-ID",{month:"long",year:"numeric",timeZone:"UTC"});
@@ -1033,7 +1082,7 @@ function calendarCard(recs, izin, title, extra=""){
       <div class="row" style="gap:6px"><button class="btn ghost cal-nav" data-cal="-1" aria-label="Bulan sebelumnya">‹</button><b style="min-width:118px;text-align:center;font-size:14px">${esc(bulan)}</b><button class="btn ghost cal-nav" data-cal="1" aria-label="Bulan berikutnya">›</button></div></div>
     ${extra}
     <div class="cal"><div class="cal-h">Sen</div><div class="cal-h">Sel</div><div class="cal-h">Rab</div><div class="cal-h">Kam</div><div class="cal-h">Jum</div><div class="cal-h">Sab</div><div class="cal-h">Min</div>${cells.join("")}</div>
-    <div class="row wrap small muted" style="gap:12px"><span><i class="lg cuti"></i>Cuti</span><span><i class="lg sakit"></i>Sakit/MC</span><span><i class="dot ok"></i> Hadir</span><span><i class="dot no"></i> Tidak lengkap</span></div></div>`;
+    <div class="row wrap small muted" style="gap:12px"><span><i class="lg cuti"></i>Cuti</span><span><i class="lg sakit"></i>Sakit/MC</span><span><i class="lg libur"></i>Tanggal merah</span><span><i class="dot ok"></i> Hadir</span><span><i class="dot no"></i> Tidak lengkap</span></div></div>`;
 }
 async function loadKalAdmin(){
   const ym=S.calMonth||dateKey().slice(0,7); S.kalRecs=null;
