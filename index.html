@@ -294,6 +294,12 @@ select.input{appearance:auto}
 @media (max-width:400px){.hero .clock{font-size:44px}.hero .clock small{font-size:18px}}
 @media (max-width:360px){.stats{grid-template-columns:repeat(2,1fr)}.hero .clock{font-size:38px}.wxi .tmp{font-size:38px}}
 
+
+/* kamera langsung: matikan blur selama kamera aktif (iPhone tidak menggambar video di bawah backdrop-filter) */
+.sheet.cam{-webkit-backdrop-filter:none!important;backdrop-filter:none!important;background:var(--bg)!important}
+.scrim.cam{-webkit-backdrop-filter:none!important;backdrop-filter:none!important;background:rgba(5,15,40,.55)}
+.scanner{isolation:isolate;-webkit-mask-image:-webkit-radial-gradient(white,black);transform:translateZ(0)}
+.scanner video{display:block;background:#000}
 </style>
 </head>
 <body>

@@ -658,31 +658,74 @@ async function stepWajah(){
       `<div class="stack" style="margin-top:16px"><button class="cta" id="goEnroll">${I.face} Daftarkan wajah sekarang</button><button class="btn block" id="fCancel">Batal</button></div>`;
     $("#goEnroll").onclick=()=>openEnroll(()=>{ openSheet(""); stepWajah(); }); $("#fCancel").onclick=closeSheet; return;
   }
-  $("#sheetBody").innerHTML = flowHead(2,"Scan wajah","Posisikan wajah di dalam lingkaran dengan cahaya yang cukup.") +
+  $("#sheetBody").innerHTML = flowHead(2,"Scan wajah","Lihat ke kamera. Wajah dipindai otomatis.") +
    `<div class="scanner" id="scan" style="margin-top:18px"><div class="ring spin"></div><span class="muted small">Membuka kamera…</span></div>
-    <div class="stack" id="faceAct" style="margin-top:16px"></div>`;
-  let ok=false;
-  try {
-    if(navigator.mediaDevices?.getUserMedia){
-      const st = await navigator.mediaDevices.getUserMedia({video:{facingMode:"user",width:{ideal:640},height:{ideal:640}},audio:false});
-      if (!$("#scan")) { st.getTracks().forEach(t=>t.stop()); return; }
-      S.stream = st;
-      $("#scan").innerHTML=`<video id="vid" autoplay playsinline muted></video><div class="ring"></div><div class="scanline"></div>`;
-      $("#vid").srcObject=S.stream; ok=true;
-      $("#faceAct").innerHTML=`<button class="cta" id="snap">${I.face} Ambil foto wajah</button><button class="btn block" id="fBack">Kembali</button>`;
-      $("#snap").onclick=()=>{ if(!$("#vid").videoWidth) return toast("Kamera belum siap, tunggu sebentar."); const v=$("#vid"),c=document.createElement("canvas"),sz=Math.min(v.videoWidth,v.videoHeight)||480; c.width=c.height=320; const x=c.getContext("2d"); x.translate(320,0); x.scale(-1,1); x.drawImage(v,(v.videoWidth-sz)/2,(v.videoHeight-sz)/2,sz,sz,0,0,320,320); stopCam(); faceCaptured(c.toDataURL("image/jpeg",.8),true); };
-    }
-  } catch(e){ stopCam(); }
+    <p class="small muted" id="scanMsg" style="text-align:center;margin-top:12px;min-height:2.6em"></p>
+    <div class="stack" id="faceAct" style="margin-top:6px"><button class="btn block" id="fBack">Kembali</button></div>`;
+  const back=()=>{ stopCam(); setPos(F.pos.lat,F.pos.lng,F.pos.akurasi,F.pos.mode); if(F.ket&&$("#gKet")) $("#gKet").value=F.ket; };
+  $("#fBack").onclick=back;
+  const box=$("#scan"), msg=t=>{ const m=$("#scanMsg"); if(m) m.textContent=t; };
+  let v=null;
+  try { v = await openCamera(box); } catch(e){ v=null; }
   if(!$("#scan")) return;
-  if(!ok){
-    $("#scan").innerHTML=`<div class="ring"></div><span style="color:var(--primary)">${I.face.replace('width="22" height="22"','width="64" height="64"')}</span>`;
-    $("#faceAct").innerHTML=`<label class="cta" for="fFile" style="cursor:pointer">${I.face} Buka kamera depan</label>
-      <input type="file" id="fFile" accept="image/*" capture="user" hidden>
-      <p class="small muted" style="text-align:center">Kamera langsung tidak tersedia di tampilan ini, jadi ponsel akan membuka aplikasi kamera.</p>
-      <button class="btn block" id="fBack">Kembali</button>`;
-    $("#fFile").onchange=e=>{ const f=e.target.files?.[0]; if(!f) return; const r=new FileReader(); r.onload=()=>faceCaptured(r.result,false); r.readAsDataURL(f); };
+  if(!v){ return photoFallback(back, src=>faceCaptured(src,false)); }
+  msg("Menyiapkan pengenal wajah… (pertama kali butuh beberapa detik)");
+  try { await loadFace(); } catch(e){ msg(e.message); return; }
+  box.insertAdjacentHTML("beforeend",'<div class="scanline"></div>');
+  const token = (S.scanToken = (S.scanToken||0)+1);
+  let gagal=0;
+  while ($("#vid") && S.scanToken===token) {
+    msg(gagal ? "Belum cocok. Hadapkan wajah lurus ke kamera dengan cahaya cukup." : "Memindai… lihat lurus ke kamera.");
+    const frame = grabFrame(v);
+    let r; try { r = await faceDescriptor(frame, true); } catch(e){ r={err:e.message}; }
+    if (!$("#vid") || S.scanToken!==token) return;
+    if (r.d && S.wajah?.descriptor) {
+      const jarak = faceDist(r.d, S.wajah.descriptor);
+      if (jarak <= FACE_THRESHOLD) {
+        stopCam(); F.face={ cocok:true, jarak:+jarak.toFixed(3) };
+        box.innerHTML=`<img src="${frame.toDataURL("image/jpeg",.8)}" class="noflip" alt="Foto wajah"><div class="ring"></div>`;
+        $("#scanMsg").textContent="";
+        $("#faceAct").innerHTML=`<div style="text-align:center"><span class="pill p-ok">Wajah cocok · skor ${jarak.toFixed(2)}</span></div><button class="cta" id="fNext">Lanjut ke konfirmasi</button><button class="btn block" id="fRetake">Ulangi</button>`;
+        $("#fNext").onclick=stepKonfirmasi; $("#fRetake").onclick=stepWajah; return;
+      }
+      gagal++;
+      if (gagal>=6) { msg(`Wajah tidak cocok dengan akun ini (skor ${jarak.toFixed(2)}). Pastikan yang absen adalah pemilik akun.`); await sleep(1500); }
+    } else if (r.err) msg(r.err);
+    await sleep(450);
   }
-  $("#fBack").onclick=()=>{ stopCam(); setPos(F.pos.lat,F.pos.lng,F.pos.akurasi,F.pos.mode); if(F.ket&&$("#gKet")) $("#gKet").value=F.ket; };
+}
+const sleep = ms => new Promise(r=>setTimeout(r,ms));
+/* Kamera depan langsung di halaman. iPhone butuh play() eksplisit dan tidak menggambar video di bawah lapisan blur, jadi blur sheet dimatikan selama kamera aktif. */
+async function openCamera(box){
+  if(!navigator.mediaDevices?.getUserMedia) return null;
+  const st = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:"user", width:{ideal:640}, height:{ideal:480} }, audio:false });
+  if(!document.body.contains(box)){ st.getTracks().forEach(t=>t.stop()); return null; }
+  stopCam(); S.stream=st;
+  document.querySelector(".sheet")?.classList.add("cam"); document.querySelector(".scrim")?.classList.add("cam");
+  const v=document.createElement("video");
+  v.id="vid"; v.muted=true; v.autoplay=true; v.playsInline=true;
+  v.setAttribute("playsinline",""); v.setAttribute("webkit-playsinline",""); v.setAttribute("muted","");
+  box.innerHTML=""; box.appendChild(v); box.insertAdjacentHTML("beforeend",'<div class="ring"></div>');
+  v.srcObject=st;
+  try { await v.play(); } catch(e){}
+  if(!v.videoWidth) await new Promise(res=>{ v.addEventListener("loadeddata",res,{once:true}); v.addEventListener("playing",res,{once:true}); setTimeout(res,3500); });
+  if(!v.videoWidth){ try{ await v.play(); }catch(e){} await sleep(600); }
+  if(!v.videoWidth){ stopCam(); return null; }
+  return v;
+}
+/* Ambil satu bingkai persegi dari video, dicerminkan seperti selfie */
+function grabFrame(v, size=400){
+  const c=document.createElement("canvas"), sz=Math.min(v.videoWidth,v.videoHeight); c.width=c.height=size;
+  const x=c.getContext("2d"); x.translate(size,0); x.scale(-1,1);
+  x.drawImage(v,(v.videoWidth-sz)/2,(v.videoHeight-sz)/2,sz,sz,0,0,size,size); return c;
+}
+/* Cadangan bila kamera langsung tidak bisa dibuka: ambil foto lewat aplikasi kamera */
+function photoFallback(onBack, onPhoto){
+  $("#scan").innerHTML=`<div class="ring"></div><span style="color:var(--primary)">${I.face.replace('width="22" height="22"','width="64" height="64"')}</span>`;
+  const m=$("#scanMsg"); if(m) m.textContent="Kamera langsung tidak bisa dibuka. Izinkan akses kamera di pengaturan, atau ambil foto lewat aplikasi kamera.";
+  $("#faceAct").innerHTML=`<label class="cta" for="fFile" style="cursor:pointer">${I.face} Ambil foto selfie</label><input type="file" id="fFile" accept="image/*" capture="user" hidden><button class="btn block" id="fBack">Kembali</button>`;
+  $("#fFile").onchange=e=>{ const f=e.target.files?.[0]; if(!f) return; const r=new FileReader(); r.onload=()=>onPhoto(r.result); r.readAsDataURL(f); e.target.value=""; };
+  $("#fBack").onclick=onBack;
 }
 /* Pencocokan wajah: deteksi + sidik wajah 128 angka (face-api), dibandingkan dengan data terdaftar */
 async function faceCaptured(src,flipped){
@@ -807,7 +850,7 @@ async function doExport(kind){
 
 
 /* ===================== Data wajah ===================== */
-const FACE_THRESHOLD = 0.5;        // jarak Euclid: makin kecil makin mirip; 0.5 = ketat namun wajar
+const FACE_THRESHOLD = 0.55;       // jarak Euclid: makin kecil makin mirip; 0.5 = ketat namun wajar
 const FACE_LIB = "https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.15/dist/face-api.js";
 const FACE_MODELS = "https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.15/model/";
 let facePromise = null;
@@ -823,62 +866,66 @@ function loadFace(){
   return facePromise;
 }
 function loadImg(src){ return new Promise((ok,no)=>{ const i=new Image(); i.onload=()=>ok(i); i.onerror=()=>no(new Error("Foto tidak bisa dibaca.")); i.src=src; }); }
-async function faceDescriptor(src){
+async function faceDescriptor(src, live=false){
   await loadFace();
-  const img = await loadImg(src);
-  const opts = new faceapi.TinyFaceDetectorOptions({ inputSize:416, scoreThreshold:0.5 });
+  const img = typeof src==="string" ? await loadImg(src) : src;
+  const opts = new faceapi.TinyFaceDetectorOptions({ inputSize: live?320:416, scoreThreshold: live?0.4:0.45 });
   const all = await faceapi.detectAllFaces(img, opts);
-  if (!all.length) return { err:"Wajah tidak terdeteksi. Hadapkan wajah ke kamera dengan cahaya cukup." };
-  if (all.length > 1) return { err:"Terdeteksi lebih dari satu wajah. Pastikan hanya kamu di foto." };
+  if (!all.length) return { err:"Wajah belum terlihat. Hadapkan wajah ke kamera dengan cahaya cukup." };
+  if (all.length > 1) return { err:"Terlihat lebih dari satu wajah. Pastikan hanya kamu di depan kamera." };
   const r = await faceapi.detectSingleFace(img, opts).withFaceLandmarks(true).withFaceDescriptor();
-  if (!r) return { err:"Wajah kurang jelas. Coba lagi dengan cahaya lebih terang." };
+  if (!r) return { err:"Wajah kurang jelas. Dekatkan sedikit dan pastikan cahaya cukup." };
   return { d: Array.from(r.descriptor) };
 }
 function faceDist(a,b){ let s=0; for(let i=0;i<a.length;i++){ const d=a[i]-b[i]; s+=d*d; } return Math.sqrt(s); }
 
 /* Pendaftaran: 3 foto, rata-rata sidik wajah disimpan ke wajah/{uid} (bukan fotonya) */
 function openEnroll(after){
-  const shots=[];
   openSheet(`<span class="eyebrow">Pendaftaran wajah</span><h2 style="font-size:22px;margin-top:4px">Daftarkan wajahmu</h2>
-    <p class="small muted" style="margin-top:4px">Ambil 3 foto wajah: lurus ke depan, sedikit ke kiri, dan sedikit ke kanan. Foto tidak disimpan, hanya sidik wajahnya.</p>
+    <p class="small muted" style="margin-top:4px">Cukup lihat ke kamera beberapa detik. Wajah direkam otomatis 3 kali. Foto tidak disimpan, hanya sidik wajahnya.</p>
     <div class="scanner" id="scan" style="margin-top:16px"><div class="ring spin"></div><span class="muted small">Membuka kamera…</span></div>
     <div class="steps" id="enSteps" style="margin-top:12px"><i></i><i></i><i></i></div>
-    <div class="stack" id="faceAct" style="margin-top:10px"></div>`);
-  const status = msg => { const p=$("#enMsg"); if(p) p.textContent=msg; };
-  const markSteps = () => document.querySelectorAll("#enSteps i").forEach((el,i)=>el.classList.toggle("on", i<shots.length));
-  async function add(src){
-    status("Memproses foto…");
-    let r; try{ r=await faceDescriptor(src); }catch(e){ r={err:e.message||String(e)}; }
-    if(!$("#scan")) return;
-    if(r.err){ status(r.err); return; }
-    if(shots.length && faceDist(r.d, shots[0]) > 0.6){ status("Foto ini tidak mirip foto pertama. Pastikan orang yang sama."); return; }
-    shots.push(r.d); markSteps();
-    if(shots.length<3){ status(`Foto ${shots.length} dari 3 tersimpan. ${shots.length===1?"Sekarang miringkan sedikit ke kiri.":"Sekarang miringkan sedikit ke kanan."}`); return; }
-    const avg = shots[0].map((_,i)=>shots.reduce((s,d)=>s+d[i],0)/shots.length);
+    <p class="small muted" id="scanMsg" style="text-align:center;min-height:2.6em"></p>
+    <div class="stack" id="faceAct"><button class="btn block" id="enCancel">Batal</button></div>`);
+  $("#enCancel").onclick=closeSheet;
+  const box=$("#scan"), msg=t=>{ const m=$("#scanMsg"); if(m) m.textContent=t; };
+  const shots=[], mark=()=>document.querySelectorAll("#enSteps i").forEach((el,i)=>el.classList.toggle("on", i<shots.length));
+  async function save(){
+    const avg = shots[0].map((_,i)=>shots.reduce((t,d)=>t+d[i],0)/shots.length);
+    msg("Menyimpan…");
     try{
-      await S.db.doc("wajah/"+S.me.uid).set({ descriptor:avg, dibuat:new Date().toISOString(), model:"face-api 1.7.15" });
+      await S.db.doc("wajah/"+S.me.uid).set({ descriptor:avg, dibuat:new Date().toISOString(), model:"face-api 1.7.15", sampel:shots.length });
       S.wajah = { descriptor:avg, dibuat:new Date().toISOString() };
-      stopCam(); toast("Wajah berhasil didaftarkan."); closeSheet(); render(); if(after) after();
-    }catch(e){ status("Gagal menyimpan data wajah. Periksa koneksi lalu coba lagi."); }
+      stopCam(); bell(); toast("Wajah berhasil didaftarkan."); closeSheet(); render(); if(after) after();
+    }catch(e){ msg("Gagal menyimpan data wajah. Periksa koneksi lalu coba lagi."); }
   }
   (async()=>{
-    let ok=false;
-    try{
-      loadFace().catch(()=>{});
-      const st = await navigator.mediaDevices.getUserMedia({video:{facingMode:"user",width:{ideal:640},height:{ideal:640}},audio:false});
-      if(!$("#scan")){ st.getTracks().forEach(t=>t.stop()); return; }
-      S.stream=st; ok=true;
-      $("#scan").innerHTML=`<video id="vid" autoplay playsinline muted></video><div class="ring"></div>`; $("#vid").srcObject=st;
-      $("#faceAct").innerHTML=`<p class="small muted" id="enMsg" style="text-align:center">Posisikan wajah lurus ke depan.</p><button class="cta" id="enSnap">${I.face} Ambil foto</button><button class="btn block" id="enCancel">Batal</button>`;
-      $("#enSnap").onclick=()=>{ const v=$("#vid"); if(!v.videoWidth) return toast("Kamera belum siap."); const c=document.createElement("canvas"); const sz=Math.min(v.videoWidth,v.videoHeight); c.width=c.height=480; const x=c.getContext("2d"); x.translate(480,0); x.scale(-1,1); x.drawImage(v,(v.videoWidth-sz)/2,(v.videoHeight-sz)/2,sz,sz,0,0,480,480); add(c.toDataURL("image/jpeg",.9)); };
-    }catch(e){ stopCam(); }
+    unlockAudio();
+    let v=null; try{ v=await openCamera(box); }catch(e){ v=null; }
     if(!$("#scan")) return;
-    if(!ok){
-      $("#scan").innerHTML=`<div class="ring"></div><span style="color:var(--primary)">${I.face.replace('width="22" height="22"','width="64" height="64"')}</span>`;
-      $("#faceAct").innerHTML=`<p class="small muted" id="enMsg" style="text-align:center">Izinkan kamera, atau ambil foto lewat aplikasi kamera.</p><label class="cta" for="enFile" style="cursor:pointer">${I.face} Buka kamera depan</label><input type="file" id="enFile" accept="image/*" capture="user" hidden><button class="btn block" id="enCancel">Batal</button>`;
-      $("#enFile").onchange=e=>{ const f=e.target.files?.[0]; if(!f) return; const r=new FileReader(); r.onload=()=>add(r.result); r.readAsDataURL(f); e.target.value=""; };
+    if(!v){
+      // Cadangan: satu foto selfie sudah cukup untuk mendaftar
+      return photoFallback(closeSheet, async src=>{
+        $("#scan").innerHTML=`<img src="${src}" class="noflip" alt="Foto wajah"><div class="ring spin"></div>`; msg("Memproses foto…");
+        let r; try{ r=await faceDescriptor(src); }catch(e){ r={err:e.message}; }
+        if(r.err){ msg(r.err); return; }
+        shots.push(r.d); mark(); save();
+      });
     }
-    $("#enCancel").onclick=closeSheet;
+    msg("Menyiapkan pengenal wajah… (pertama kali butuh beberapa detik)");
+    try{ await loadFace(); }catch(e){ msg(e.message); return; }
+    box.insertAdjacentHTML("beforeend",'<div class="scanline"></div>');
+    const token = (S.scanToken = (S.scanToken||0)+1);
+    while($("#vid") && S.scanToken===token && shots.length<3){
+      let r; try{ r=await faceDescriptor(grabFrame(v), true); }catch(e){ r={err:e.message}; }
+      if(!$("#vid") || S.scanToken!==token) return;
+      if(r.d){
+        if(shots.length && faceDist(r.d, shots[0]) > 0.6){ shots.length=0; mark(); msg("Wajah berubah. Mengulang dari awal, tetap lihat ke kamera."); }
+        else { shots.push(r.d); mark(); msg(shots.length<3 ? `Bagus! Rekaman ${shots.length} dari 3. Tetap lihat ke kamera…` : "Selesai merekam."); }
+        await sleep(500);
+      } else { msg(r.err); await sleep(350); }
+    }
+    if(shots.length>=3) save();
   })();
 }
 
