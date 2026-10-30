@@ -1,5 +1,5 @@
 const LOGO = "logo.png";
-const APP_VERSION = "Versi 12 · 30 Okt 2026";
+const APP_VERSION = "Versi 14 · 30 Okt 2026";
 
 /* ===================== Konfigurasi & util ===================== */
 const TZ = "Asia/Kuala_Lumpur";
@@ -456,13 +456,10 @@ function viewProfil(){
   <p class="small muted" style="text-align:center;opacity:.7">${APP_VERSION}</p>`;
 }
 function faceCard(){
-  const w=S.wajah, ok=w?.disetujui===true;
-  const pill = !w ? '<span class="pill p-bad">Belum terdaftar</span>' : ok ? '<span class="pill p-ok">Disetujui</span>' : '<span class="pill p-warn">Menunggu admin</span>';
-  const ket = !w ? 'Daftarkan wajahmu sekali. Setelah disetujui admin, wajah dicocokkan setiap kali absen.'
-    : ok ? `Disetujui ${esc(new Date(w.disetujuiPada||w.dibuat).toLocaleDateString("id-ID",{timeZone:TZ,day:"numeric",month:"long",year:"numeric"}))}. Untuk mengulang pendaftaran, minta admin menghapus data wajahmu.`
-    : 'Data wajahmu sudah terkirim dan sedang menunggu pemeriksaan admin. Absen bisa dilakukan setelah disetujui.';
-  return `<div class="card stack"><div class="row between"><h3 style="font-size:16px">Data wajah</h3>${pill}</div>
-    <p class="small muted">${ket}</p>${w?'':'<button class="btn primary" id="enrollBtn">Daftarkan wajah</button>'}</div>`;
+  const w=S.wajah;
+  return `<div class="card stack"><div class="row between"><h3 style="font-size:16px">Data wajah</h3>${w?'<span class="pill p-ok">Terdaftar</span>':'<span class="pill p-bad">Belum terdaftar</span>'}</div>
+    <p class="small muted">${w?`Didaftarkan ${esc(new Date(w.dibuat).toLocaleDateString("id-ID",{timeZone:TZ,day:"numeric",month:"long",year:"numeric"}))}. Untuk mengulang pendaftaran, minta admin menghapus data wajahmu.`:'Daftarkan wajahmu sekali. Setelah itu wajah dicocokkan setiap kali absen.'}</p>
+    ${w?'':'<button class="btn primary" id="enrollBtn">Daftarkan wajah</button>'}</div>`;
 }
 
 function pwCard(){
@@ -518,11 +515,15 @@ function exportCard(){
   </div>`;
 }
 
-function wajahPill(uid){ const w=(S.wajahAll||{})[uid]; return !w ? '<span class="pill p-mute">Wajah belum</span>' : w.disetujui===true ? '<span class="pill p-ok">Wajah OK</span>' : '<span class="pill p-warn">Wajah menunggu</span>'; }
+function wajahMirip(uid){
+  const w=(S.wajahAll||{})[uid]; if(!w?.descriptor) return [];
+  return Object.entries(S.wajahAll||{}).filter(([u,o])=>u!==uid && o.descriptor && faceDist(w.descriptor,o.descriptor)<0.45).map(([u])=>u);
+}
+function wajahPill(uid){ const w=(S.wajahAll||{})[uid]; return !w ? '<span class="pill p-mute">Wajah belum</span>' : wajahMirip(uid).length ? '<span class="pill p-bad">Wajah mirip staf lain</span>' : '<span class="pill p-ok">Wajah OK</span>'; }
 function viewStaff(){
-  const list = S.staff, tunggu = list.filter(s=>{ const w=(S.wajahAll||{})[s.uid]; return w && w.disetujui!==true; });
+  const list = S.staff, tunggu = list.filter(s=>wajahMirip(s.uid).length);
   return `<div class="row between"><div><span class="eyebrow">${list.filter(s=>s.role!=='admin').length} staf terdaftar</span><h2 style="font-size:24px">Data Staf</h2></div><button class="btn primary" id="addStaff">+ Tambah</button></div>
-  ${tunggu.length?`<div class="card flat libur-info small"><b>${tunggu.length} data wajah menunggu persetujuan.</b> Buka "Ubah" pada staf bertanda kuning untuk memeriksa fotonya.</div>`:''}
+  ${tunggu.length?`<div class="card flat libur-info small"><b>${tunggu.length} data wajah mirip dengan staf lain.</b> Buka "Ubah" pada staf bertanda merah, periksa fotonya, lalu hapus data wajah yang salah.</div>`:''}
   <div class="card">${list.length?`<div class="list">${list.map(s=>`<div class="item"><div class="ini" ${s.aktif===false?'style="background:var(--surface-2);color:var(--muted)"':''}>${esc(initials(s.nama))}</div>
     <div class="grow"><div class="name">${esc(s.nama)}</div><div class="sub">${esc(s.fungsi)} · @${esc(s.username)}</div>
     <div style="margin-top:4px">${s.role==='admin'?'<span class="pill p-info">Admin</span>':''} ${s.aktif===false?'<span class="pill p-mute">Nonaktif</span>':''} ${s.role!=='admin'?wajahPill(s.uid):''}</div></div>
@@ -673,9 +674,6 @@ function openStaffForm(s){
       closeSheet(); toast(isNew?"Staf ditambahkan.":"Data staf diperbarui.");
     } catch(ex){ const c=ex?.code||""; fail(/email-already-in-use/.test(c) ? "Username sudah dipakai." : /weak-password/.test(c) ? "Password terlalu lemah." : "Gagal menyimpan. Periksa koneksi lalu coba lagi."); }
   };
-  $("#sApprove") && ($("#sApprove").onclick = async ()=>{
-    try{ await S.db.doc("wajah/"+s.uid).update({ disetujui:true, disetujuiPada:new Date().toISOString(), disetujuiOleh:S.me.uid }); toast("Data wajah disetujui."); closeSheet(); }catch(e){ toast("Gagal menyetujui."); }
-  });
   $("#sFace") && ($("#sFace").onclick = async ()=>{
     try{ await S.db.doc("wajah/"+s.uid).delete(); toast("Data wajah dihapus. Staf bisa mendaftar ulang dari Profil."); }catch(e){ toast("Gagal menghapus data wajah."); }
   });
@@ -745,19 +743,15 @@ function setPos(lat,lng,acc,mode){
 
 async function stepWajah(){
   if (S.wajah === null) {
-    $("#sheetBody").innerHTML = flowHead(2,"Wajah belum terdaftar","Daftarkan wajahmu sekali. Setelah disetujui admin, kamu bisa absen.") +
+    $("#sheetBody").innerHTML = flowHead(2,"Wajah belum terdaftar","Daftarkan wajahmu sekali, lalu lanjutkan absen.") +
       `<div class="stack" style="margin-top:16px"><button class="cta" id="goEnroll">${I.face} Daftarkan wajah sekarang</button><button class="btn block" id="fCancel">Batal</button></div>`;
-    $("#goEnroll").onclick=()=>openEnroll(); $("#fCancel").onclick=closeSheet; return;
+    $("#goEnroll").onclick=()=>openEnroll(()=>{ openFlowAt2(); }); $("#fCancel").onclick=closeSheet; return;
   }
-  if (S.wajah && S.wajah.disetujui !== true) {
-    $("#sheetBody").innerHTML = flowHead(2,"Menunggu persetujuan admin","Data wajahmu sudah terkirim. Absen bisa dilakukan setelah admin memeriksa dan menyetujuinya.") +
-      `<div class="stack" style="margin-top:16px"><button class="btn block" id="fCancel">Tutup</button></div>`;
-    $("#fCancel").onclick=closeSheet; return;
-  }
+
   solidSheet();
   $("#sheetBody").innerHTML = flowHead(2,"Scan wajah","Lihat lurus ke kamera dan tahan sebentar.") +
    `<div class="scanner" id="scan" style="margin-top:18px"><div class="ring spin"></div><span class="muted small">Membuka kamera…</span></div>
-    <div class="steps" id="vSteps" style="margin-top:12px"><i></i><i></i><i></i></div>
+    <div class="steps" id="vSteps" style="margin-top:12px"><i></i><i></i></div>
     <p class="small muted" id="scanMsg" style="text-align:center;min-height:2.6em"></p>
     <div class="stack" id="faceAct" style="margin-top:6px"><button class="btn block" id="fBack">Kembali</button></div>`;
   const back=()=>{ S.scanToken=(S.scanToken||0)+1; stopCam(); setPos(F.pos.lat,F.pos.lng,F.pos.akurasi,F.pos.mode); if(F.ket&&$("#gKet")) $("#gKet").value=F.ket; };
@@ -772,7 +766,7 @@ async function stepWajah(){
   try { await loadFace(); } catch(e){ msg(e.message); return; }
   const token = (S.scanToken = (S.scanToken||0)+1);
   let cocok=[], percobaan=0, terakhir=null;
-  const MAKS = 14;
+  const MAKS = 25;
   while ($("#vid") && S.scanToken===token && percobaan < MAKS) {
     const frame = grabFrame(v, 480);
     if (ketajaman(frame) < TAJAM_MIN) { msg("Gambar buram. Tahan HP agar tidak goyang."); await sleep(250); continue; }
@@ -781,11 +775,11 @@ async function stepWajah(){
     if (r.err) { msg(r.err); await sleep(300); continue; }
     percobaan++;
     const jarak = jarakKe(r.d, S.wajah);
-    if (jarak <= FACE_THRESHOLD) { cocok.push(jarak); terakhir=frame; mark(cocok.length); msg(`Memverifikasi… ${cocok.length} dari 3`); }
-    else { cocok=[]; mark(0); msg("Wajah belum cocok. Hadap lurus ke kamera."); }
-    if (cocok.length >= 3) {
+    if (jarak <= FACE_THRESHOLD) { cocok.push(jarak); terakhir=frame; mark(cocok.length); msg("Memverifikasi…"); }
+    else { msg("Wajah belum cocok. Hadap lurus ke kamera."); }
+    if (cocok.length >= 2) {
       const rata = cocok.reduce((a,b)=>a+b,0)/cocok.length;
-      stopCam(); F.face={ cocok:true, jarak:+rata.toFixed(3), frame:3 };
+      stopCam(); F.face={ cocok:true, jarak:+rata.toFixed(3), frame:2 };
       return sukses(box, terakhir, rata);
     }
     await sleep(200);
@@ -852,7 +846,7 @@ async function faceCaptured(src,flipped){
   $("#scan").querySelector(".ring")?.classList.remove("spin");
   const retry = msg => { $("#faceAct").innerHTML=`<div style="text-align:center"><span class="pill p-bad">${esc(msg)}</span></div><button class="cta" id="fRetake">Ulangi foto</button><button class="btn block" id="fBack2">Batal</button>`; $("#fRetake").onclick=stepWajah; $("#fBack2").onclick=closeSheet; };
   if(res.err) return retry(res.err);
-  if(!S.wajah?.descriptor || S.wajah.disetujui!==true) return retry("Data wajah belum disetujui admin.");
+  if(!S.wajah?.descriptor) return retry("Data wajah belum termuat. Coba lagi sebentar.");
   const jarak = jarakKe(res.d, S.wajah);
   if(jarak > FACE_THRESHOLD - 0.04) return retry("Wajah tidak cocok dengan akun ini.");
   F.face={ cocok:true, jarak:+jarak.toFixed(3), frame:1 };
@@ -1001,7 +995,7 @@ async function doExport(kind){
 
 
 /* ===================== Data wajah ===================== */
-const FACE_THRESHOLD = 0.42;       // jarak Euclid: makin kecil makin mirip; 0.5 = ketat namun wajar
+const FACE_THRESHOLD = 0.5;        // jarak Euclid: makin kecil makin mirip (0.5 = seimbang antara mudah dan aman)
 const FACE_LIB = "https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.15/dist/face-api.js";
 const FACE_MODELS = "https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.15/model/";
 let facePromise = null;
@@ -1010,6 +1004,7 @@ function loadFace(){
   facePromise = (async () => {
     if (!window.faceapi) await new Promise((ok,no)=>{ const s=document.createElement("script"); s.src=FACE_LIB; s.onload=ok; s.onerror=()=>no(new Error("Gagal memuat pengenal wajah. Periksa koneksi.")); document.head.appendChild(s); });
     await faceapi.nets.tinyFaceDetector.loadFromUri(FACE_MODELS);
+    try{ faceapi.nets.ssdMobilenetv1?.loadFromUri(FACE_MODELS)?.catch(()=>{}); }catch(e){}   // cadangan, dimuat di latar belakang
     await faceapi.nets.faceLandmark68Net.loadFromUri(FACE_MODELS);
     await faceapi.nets.faceRecognitionNet.loadFromUri(FACE_MODELS);
   })();
@@ -1020,16 +1015,23 @@ function loadImg(src){ return new Promise((ok,no)=>{ const i=new Image(); i.onlo
 async function faceDescriptor(src, live=false){
   await loadFace();
   const img = typeof src==="string" ? await loadImg(src) : src;
-  const opts = new faceapi.TinyFaceDetectorOptions({ inputSize:416, scoreThreshold:0.5 });
-  const all = await faceapi.detectAllFaces(img, opts);
-  if (!all.length) return { err:"Wajah belum terlihat. Hadapkan wajah ke kamera dengan cahaya cukup." };
-  if (all.length > 1) return { err:"Terlihat lebih dari satu wajah. Pastikan hanya kamu di depan kamera." };
-  const r = await faceapi.detectSingleFace(img, opts).withFaceLandmarks().withFaceDescriptor();
-  if (!r) return { err:"Wajah kurang jelas. Dekatkan sedikit dan pastikan cahaya cukup." };
+  // 1) detektor cepat, 2) ukuran input lain, 3) detektor SSD yang lebih kuat untuk cahaya dari belakang
+  const pilihan = [ new faceapi.TinyFaceDetectorOptions({ inputSize:416, scoreThreshold:0.3 }),
+                    new faceapi.TinyFaceDetectorOptions({ inputSize:320, scoreThreshold:0.3 }) ];
+  if (faceapi.nets.ssdMobilenetv1?.isLoaded) pilihan.push(new faceapi.SsdMobilenetv1Options({ minConfidence:0.3 }));
+  let r=null, jumlah=0;
+  for (const opts of pilihan) {
+    const all = await faceapi.detectAllFaces(img, opts);
+    if (!all.length) continue;
+    jumlah = all.length;
+    // bila ada beberapa wajah, pakai yang terbesar (orang paling dekat ke kamera)
+    r = await faceapi.detectSingleFace(img, opts).withFaceLandmarks().withFaceDescriptor();
+    if (r) break;
+  }
+  if (!r) return { err:"Wajah belum terlihat. Dekatkan wajah dan hindari cahaya terang tepat di belakang kepala." };
   const W = img.width || img.naturalWidth, box = r.detection.box;
-  if (box.width < W*0.28) return { err:"Dekatkan wajah ke kamera." };
-  if (r.detection.score < 0.6) return { err:"Wajah kurang jelas. Hadap lurus ke kamera." };
-  return { d: Array.from(r.descriptor), skor:r.detection.score };
+  if (box.width < W*0.16) return { err:"Dekatkan wajah ke kamera." };
+  return { d: Array.from(r.descriptor), skor:r.detection.score, lain: jumlah>1 };
 }
 /* Ketajaman gambar (variansi Laplacian): menolak bingkai yang buram/goyang */
 function ketajaman(c){
@@ -1040,38 +1042,38 @@ function ketajaman(c){
   for(let y=1;y<n-1;y++) for(let xx=1;xx<n-1;xx++){ const i=y*n+xx, l=4*g[i]-g[i-1]-g[i+1]-g[i-n]-g[i+n]; sum+=l; sum2+=l*l; k++; }
   const m=sum/k; return sum2/k-m*m;
 }
-const TAJAM_MIN = 60;
+const TAJAM_MIN = 20;
 /* Jarak ke data terdaftar: dibandingkan dengan rata-rata DAN setiap sampel, ambil yang paling ketat */
 function jarakKe(d, w){
   const rata = faceDist(d, w.descriptor);
-  const sampel = Array.isArray(w.sampel) && w.sampel.length ? w.sampel.map(x=>faceDist(d, x.v||x)) : [rata];
-  const urut = [...sampel].sort((a,b)=>a-b), median = urut[Math.floor(urut.length/2)];
-  return Math.max(rata, median);
+  if (!Array.isArray(w.sampel) || !w.sampel.length) return rata;
+  const terdekat = Math.min(...w.sampel.map(x=>faceDist(d, x.v||x)));
+  return Math.min(rata, (rata+terdekat)/2);
 }
 function faceDist(a,b){ let s=0; for(let i=0;i<a.length;i++){ const d=a[i]-b[i]; s+=d*d; } return Math.sqrt(s); }
 
 /* Pendaftaran: 3 foto, rata-rata sidik wajah disimpan ke wajah/{uid} (bukan fotonya) */
 function openEnroll(after){
   openSheet(`<span class="eyebrow">Pendaftaran wajah</span><h2 style="font-size:22px;margin-top:4px">Daftarkan wajahmu</h2>
-    <p class="small muted" style="margin-top:4px">Lihat lurus ke kamera dan tahan beberapa detik. Wajah direkam otomatis 5 kali, lalu dikirim ke admin untuk disetujui.</p>
+    <p class="small muted" style="margin-top:4px">Lihat lurus ke kamera dan tahan beberapa detik. Wajah direkam otomatis 3 kali. Foto tidak disimpan, hanya sidik wajahnya.</p>
     <div class="scanner" id="scan" style="margin-top:16px"><div class="ring spin"></div><span class="muted small">Membuka kamera…</span></div>
-    <div class="steps" id="enSteps" style="margin-top:12px"><i></i><i></i><i></i><i></i><i></i></div>
+    <div class="steps" id="enSteps" style="margin-top:12px"><i></i><i></i><i></i></div>
     <p class="small muted" id="scanMsg" style="text-align:center;min-height:2.6em"></p>
     <div class="stack" id="faceAct"><button class="btn block" id="enCancel">Batal</button></div>`);
   solidSheet();
   const cancel=()=>{ S.scanToken=(S.scanToken||0)+1; closeSheet(); };
   $("#enCancel").onclick=cancel;
   const box=$("#scan"), msg=t=>{ const m=$("#scanMsg"); if(m) m.textContent=t; };
-  const N=5, shots=[]; let foto=null;
+  const N=3, shots=[]; let foto=null;
   const mark=()=>document.querySelectorAll("#enSteps i").forEach((el,i)=>el.classList.toggle("on", i<shots.length));
   async function save(){
     const avg = shots[0].map((_,i)=>shots.reduce((t,d)=>t+d[i],0)/shots.length);
-    msg("Mengirim ke admin…");
+    msg("Menyimpan…");
     try{
-      const data={ descriptor:avg, sampel:shots.map(v=>({v})), foto, disetujui:false, dibuat:new Date().toISOString(), model:"face-api 1.7.15 (68 titik)" };
+      const data={ descriptor:avg, sampel:shots.map(v=>({v})), foto, dibuat:new Date().toISOString(), model:"face-api 1.7.15 (68 titik)" };
       await S.db.doc("wajah/"+S.me.uid).set(data);
       S.wajah = data;
-      stopCam(); bell(); toast("Data wajah terkirim. Tunggu persetujuan admin."); closeSheet(); render(); if(after) after();
+      stopCam(); bell(); toast("Wajah berhasil didaftarkan."); closeSheet(); render(); if(after) after();
     }catch(e){ msg(sebabGagal(e)); }
   }
   (async()=>{
@@ -1088,7 +1090,7 @@ function openEnroll(after){
       let r; try{ r=await faceDescriptor(frame, true); }catch(e){ r={err:e.message}; }
       if(!$("#vid") || S.scanToken!==token) return;
       if(r.err){ msg(r.err); await sleep(300); continue; }
-      if(shots.length && faceDist(r.d, shots[0]) > 0.38){ shots.length=0; foto=null; mark(); msg("Wajah berubah. Mengulang dari awal, tetap lihat ke kamera."); await sleep(400); continue; }
+      if(shots.length && faceDist(r.d, shots[0]) > 0.55){ shots.length=0; foto=null; mark(); msg("Wajah berubah. Mengulang dari awal, tetap lihat ke kamera."); await sleep(400); continue; }
       if(!foto){ const t=document.createElement("canvas"); t.width=t.height=200; t.getContext("2d").drawImage(frame,0,0,200,200); foto=t.toDataURL("image/jpeg",.75); }
       shots.push(r.d); mark(); msg(shots.length<N ? `Bagus! Rekaman ${shots.length} dari ${N}. Tetap lihat ke kamera…` : "Selesai merekam.");
       await sleep(350);
@@ -1294,15 +1296,15 @@ async function hapusIzin(id){
 function faceAdminBox(st){
   const w=(S.wajahAll||{})[st.uid];
   if(!w) return `<div class="card flat small muted">Staf ini belum mendaftarkan wajah.</div>`;
-  const mirip = Object.entries(S.wajahAll||{}).filter(([uid,o])=>uid!==st.uid && o.descriptor).map(([uid,o])=>({uid, j:faceDist(w.descriptor,o.descriptor)})).filter(x=>x.j<0.5).sort((a,b)=>a.j-b.j);
   const nama = uid => (S.staff.find(x=>x.uid===uid)||{}).nama || "staf lain";
+  const mirip = wajahMirip(st.uid);
   return `<div class="card flat stack" style="gap:10px"><div class="row" style="gap:12px">
       ${w.foto?`<img src="${w.foto}" alt="Foto pendaftaran wajah" style="width:84px;height:84px;border-radius:20px;object-fit:cover;flex:none">`:''}
-      <div style="min-width:0"><b>Data wajah</b><p class="small muted">Didaftarkan ${esc(new Date(w.dibuat).toLocaleString("id-ID",{timeZone:TZ,day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"}))}</p>
-      ${w.disetujui===true?'<span class="pill p-ok">Disetujui</span>':'<span class="pill p-warn">Menunggu persetujuan</span>'}</div></div>
-    ${mirip.length?`<div class="banner" style="color:var(--bad);background:var(--bad-soft)"><b>Peringatan:</b> wajah ini sangat mirip dengan ${mirip.map(x=>esc(nama(x.uid))).join(", ")}. Kemungkinan didaftarkan oleh orang lain. Hapus dan minta staf mendaftar ulang di depanmu.</div>`:''}
-    ${w.disetujui===true?'':`<p class="small muted">Pastikan foto ini benar wajah ${esc(st.nama)} sebelum menyetujui.</p><button type="button" class="btn primary block" id="sApprove">Setujui data wajah</button>`}
+      <div style="min-width:0"><b>Data wajah</b><p class="small muted">Didaftarkan ${esc(new Date(w.dibuat).toLocaleString("id-ID",{timeZone:TZ,day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"}))}</p><span class="pill p-ok">Terdaftar</span></div></div>
+    ${mirip.length?`<div class="banner" style="color:var(--bad);background:var(--bad-soft)"><b>Peringatan:</b> wajah ini sangat mirip dengan ${mirip.map(u=>esc(nama(u))).join(", ")}. Kemungkinan didaftarkan oleh orang lain. Periksa fotonya, lalu hapus data wajah yang salah.</div>`:''}
   </div>`;
 }
 
 
+
+function openFlowAt2(){ openSheet(""); stepWajah(); }
