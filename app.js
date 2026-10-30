@@ -1,5 +1,5 @@
 const LOGO = "logo.png";
-const APP_VERSION = "Versi 11 · 30 Okt 2026";
+const APP_VERSION = "Versi 12 · 30 Okt 2026";
 
 /* ===================== Konfigurasi & util ===================== */
 const TZ = "Asia/Kuala_Lumpur";
@@ -767,12 +767,7 @@ async function stepWajah(){
   let v=null;
   try { v = await openCamera(box); } catch(e){ v=null; }
   if(!$("#scan")) return;
-  if(!v){
-    box.innerHTML=`<div class="ring" style="border-color:var(--bad)"></div><span style="color:var(--bad)">${I.face.replace('width="22" height="22"','width="64" height="64"')}</span>`;
-    msg("Kamera langsung dibutuhkan untuk cek wajah hidup. Izinkan akses kamera untuk situs ini di pengaturan browser (Safari: aA → Pengaturan Situs Web → Kamera → Izinkan), lalu coba lagi.");
-    $("#faceAct").innerHTML=`<button class="cta" id="fRetake">Coba lagi</button><button class="btn block" id="fBack">Kembali</button>`;
-    $("#fRetake").onclick=stepWajah; $("#fBack").onclick=back; return;
-  }
+  if(!v){ return photoFallback(back, src=>faceCaptured(src,false)); }
   msg("Menyiapkan pengenal wajah… (pertama kali butuh beberapa detik)");
   try { await loadFace(); } catch(e){ msg(e.message); return; }
   const token = (S.scanToken = (S.scanToken||0)+1);
@@ -790,14 +785,8 @@ async function stepWajah(){
     else { cocok=[]; mark(0); msg("Wajah belum cocok. Hadap lurus ke kamera."); }
     if (cocok.length >= 3) {
       const rata = cocok.reduce((a,b)=>a+b,0)/cocok.length;
-      // Liveness: 2 tantangan acak, lalu cek ulang identitas agar wajah tidak ditukar di tengah jalan
-      const live = await cekHidup(v, msg, token, 2);
-      if (!$("#vid") || S.scanToken!==token) return;
-      if (!live.ok) { stopCam(); return gagalHidup(box, live.alasan); }
-      const akhir = grabFrame(v, 480); let r2; try{ r2=await faceDescriptor(akhir, true); }catch(e){ r2={err:e.message}; }
-      if (r2.err || jarakKe(r2.d, S.wajah) > FACE_THRESHOLD) { stopCam(); return gagalHidup(box, "Wajah berganti saat verifikasi. Ulangi dengan wajah pemilik akun."); }
-      stopCam(); F.face={ cocok:true, jarak:+rata.toFixed(3), frame:3, liveness:live.tantangan };
-      return sukses(box, akhir, rata);
+      stopCam(); F.face={ cocok:true, jarak:+rata.toFixed(3), frame:3 };
+      return sukses(box, terakhir, rata);
     }
     await sleep(200);
   }
@@ -892,7 +881,7 @@ function stepKonfirmasi(){
       <div class="row between"><span class="muted">Premis</span><span class="premis" style="${F.pos.dalamRadius?'':'background:var(--bad-soft);color:var(--bad)'}">${I.bldg}${esc(F.pos.premisNama)}</span></div>
       ${!isIn && tr?.masuk ? `<div class="row between"><span class="muted">Jam kerja</span><b class="mono">${fmtDur(durMin(tr.masuk.ts,now.toISOString()))}</b></div>` : ''}
       ${!isIn && !tr?.masuk ? `<div class="row between"><span class="muted">Catatan</span><span class="pill p-bad">Tanpa absen masuk</span></div>` : ''}
-      <div class="row between"><span class="muted">Wajah</span><span class="pill p-ok">Cocok · ${F.face?.liveness?'wajah hidup ✓':'skor '+(F.face?.jarak ?? "-")}</span></div>
+      <div class="row between"><span class="muted">Wajah</span><span class="pill p-ok">Cocok · skor ${F.face?.jarak ?? "-"}</span></div>
       ${F.ket?`<div class="row between"><span class="muted">Keterangan</span><b style="text-align:right">${esc(F.ket)}</b></div>`:''}
     </div>
     <div class="stack" style="margin-top:16px"><button class="cta ${isIn?'':'out'}" id="kSend">${isIn?I.in:I.out} Kirim absen ${F.jenis}</button><button class="btn block" id="kCancel">Batal</button></div>`;
@@ -1104,12 +1093,7 @@ function openEnroll(after){
       shots.push(r.d); mark(); msg(shots.length<N ? `Bagus! Rekaman ${shots.length} dari ${N}. Tetap lihat ke kamera…` : "Selesai merekam.");
       await sleep(350);
     }
-    if(shots.length>=N){
-      const live = await cekHidup(v, msg, token, 1);
-      if(!$("#vid") || S.scanToken!==token) return;
-      if(!live.ok){ stopCam(); msg(""); $("#faceAct").innerHTML=`<div class="card flat" style="text-align:center;color:var(--bad)"><b>${esc(live.alasan)}</b></div><button class="cta" id="enRetry">Ulangi pendaftaran</button><button class="btn block" id="enCancel2">Batal</button>`; $("#enRetry").onclick=()=>openEnroll(after); $("#enCancel2").onclick=closeSheet; return; }
-      save();
-    }
+    if(shots.length>=N) save();
   })();
 }
 
@@ -1322,61 +1306,3 @@ function faceAdminBox(st){
 }
 
 
-/* ===================== Liveness (cek wajah hidup) =====================
-   Tantangan acak dibaca dari 68 titik wajah:
-   - kedip: rasio bukaan mata (EAR) turun tajam lalu naik lagi
-   - toleh kiri/kanan: posisi ujung hidung bergeser dari tengah kedua mata
-   Foto atau layar diam tidak bisa memenuhi tantangan ini. */
-const TANTANGAN = {
-  kedip: { teks:"Kedipkan mata", ikon:"😉" },
-  kiri:  { teks:"Toleh pelan ke kiri", ikon:"⬅️" },
-  kanan: { teks:"Toleh pelan ke kanan", ikon:"➡️" }
-};
-function titikWajah(lm){
-  const p=lm.positions||lm._positions||lm, d=(a,b)=>Math.hypot(a.x-b.x,a.y-b.y);
-  const ear=(i)=> (d(p[i+1],p[i+5])+d(p[i+2],p[i+4]))/(2*d(p[i],p[i+3]));
-  const iod=d(p[36],p[45]), midX=(p[36].x+p[45].x)/2;
-  return { ear:(ear(36)+ear(42))/2, yaw:(p[30].x-midX)/iod };
-}
-async function bacaPose(v){
-  const f=grabFrame(v, 320);
-  const r=await faceapi.detectSingleFace(f, new faceapi.TinyFaceDetectorOptions({inputSize:320, scoreThreshold:0.45})).withFaceLandmarks();
-  return r ? titikWajah(r.landmarks) : null;
-}
-function acak(n){ const k=Object.keys(TANTANGAN).sort(()=>Math.random()-.5); if(n>1 && k[0]!=="kedip" && k[1]!=="kedip") k[1]="kedip"; return k.slice(0,n); }
-async function cekHidup(v, msg, token, n){
-  const daftar=acak(n), selesai=[];
-  const banner = t => { const sc=$("#scan"); if(!sc) return; let b=sc.querySelector(".live-tip"); if(!b){ b=document.createElement("div"); b.className="live-tip"; sc.appendChild(b); } b.innerHTML=`<span>${TANTANGAN[t].ikon}</span>${esc(TANTANGAN[t].teks)}`; };
-  // garis dasar: wajah lurus dengan mata terbuka
-  let dasar=null;
-  for(let i=0;i<12 && !dasar;i++){ const q=await bacaPose(v).catch(()=>null); if(!$("#vid")||S.scanToken!==token) return {ok:false}; if(q && Math.abs(q.yaw)<0.12 && q.ear>0.2) dasar=q; else { msg("Hadap lurus ke kamera."); await sleep(150); } }
-  if(!dasar) return { ok:false, alasan:"Wajah tidak terbaca dengan jelas. Hadap lurus ke kamera dengan cahaya cukup." };
-  for(const t of daftar){
-    banner(t); msg(`Cek wajah hidup ${selesai.length+1} dari ${daftar.length}: ${TANTANGAN[t].teks.toLowerCase()}.`);
-    const mulai=Date.now(); let tutup=false, berhasil=false;
-    while(Date.now()-mulai < 8000){
-      const q=await bacaPose(v).catch(()=>null);
-      if(!$("#vid")||S.scanToken!==token) return {ok:false};
-      if(q){
-        if(t==="kedip"){ if(q.ear < dasar.ear*0.62) tutup=true; else if(tutup && q.ear > dasar.ear*0.85){ berhasil=true; break; } }
-        if(t==="kiri" && q.yaw - dasar.yaw < -0.16){ berhasil=true; break; }
-        if(t==="kanan" && q.yaw - dasar.yaw > 0.16){ berhasil=true; break; }
-      }
-      await sleep(60);
-    }
-    if(!berhasil){ $("#scan")?.querySelector(".live-tip")?.remove(); return { ok:false, alasan:`Gerakan "${TANTANGAN[t].teks.toLowerCase()}" tidak terdeteksi. Ulangi dan lakukan dengan jelas.` }; }
-    selesai.push(t); msg("Bagus!"); await sleep(350);
-    if(t!=="kedip"){ // kembali menghadap depan sebelum tantangan berikutnya
-      const m2=Date.now(); while(Date.now()-m2<4000){ const q=await bacaPose(v).catch(()=>null); if(q && Math.abs(q.yaw-dasar.yaw)<0.08) break; msg("Kembali hadap lurus ke kamera."); await sleep(80); }
-    }
-  }
-  $("#scan")?.querySelector(".live-tip")?.remove();
-  return { ok:true, tantangan:selesai };
-}
-function gagalHidup(box, alasan){
-  box.innerHTML=`<div class="ring" style="border-color:var(--bad)"></div><span style="color:var(--bad)">${I.face.replace('width="22" height="22"','width="64" height="64"')}</span>`;
-  const m=$("#scanMsg"); if(m) m.textContent="";
-  $("#faceAct").innerHTML=`<div class="card flat" style="text-align:center;color:var(--bad)"><b>Cek wajah hidup gagal.</b><p class="small">${esc(alasan||"Ulangi dan ikuti instruksi di layar.")}</p></div>
-    <button class="cta" id="fRetake">Coba lagi</button><button class="btn block" id="fBack2">Batal</button>`;
-  $("#fRetake").onclick=stepWajah; $("#fBack2").onclick=closeSheet;
-}
