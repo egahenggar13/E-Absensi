@@ -1,4 +1,5 @@
 const LOGO = "logo.png";
+const APP_VERSION = "Versi 10 · 30 Okt 2026";
 
 /* ===================== Konfigurasi & util ===================== */
 const TZ = "Asia/Kuala_Lumpur";
@@ -268,6 +269,12 @@ function skyLayer(key){
   if(j==="fog") for(let i=0;i<4;i++) parts.push(`<i class="mist" style="top:${20+i*22}%;animation-duration:${(20+r()*20)|0}s"></i>`);
   return `<div class="sky" aria-hidden="true">${parts.join("")}</div>`;
 }
+function sebabGagal(e){
+  const c=e?.code||"";
+  if(/permission-denied|insufficient/i.test(c+(e?.message||""))) return "Ditolak oleh aturan database. Pastikan aplikasi sudah versi terbaru dan Firestore Rules sudah diperbarui.";
+  if(/unavailable|network|offline/i.test(c+(e?.message||""))) return "Tidak ada koneksi internet. Coba lagi.";
+  return "Gagal menyimpan ("+(c||"tidak diketahui")+"). Coba lagi.";
+}
 function menitLalu(iso){ const m=Math.round((Date.now()-new Date(iso))/60000); return m<1 ? "baru saja" : m<60 ? `${m} mnt lalu` : `${Math.round(m/60)} jam lalu`; }
 function weatherInline(){
   const key=skyKey(); if(!key) return "";
@@ -355,6 +362,7 @@ function viewLogin(){
     </form>
     <p class="small muted" style="text-align:center">Lupa password? Minta admin kepegawaian untuk mengatur ulang.</p>
     ${installHint()}
+    <p class="small muted" style="text-align:center;opacity:.7">${APP_VERSION}</p>
   </div>`;
 }
 
@@ -444,7 +452,8 @@ function viewProfil(){
   ${faceCard()}
   ${installHint()}
   ${pwCard()}
-  <button class="btn danger block" id="logout">Keluar</button>`;
+  <button class="btn danger block" id="logout">Keluar</button>
+  <p class="small muted" style="text-align:center;opacity:.7">${APP_VERSION}</p>`;
 }
 function faceCard(){
   const w=S.wajah, ok=w?.disetujui===true;
@@ -964,7 +973,7 @@ async function submitAbsen(){
     $("#kDone").onclick=closeSheet;
     bell();
     if(F.jenis==="pulang") setTimeout(()=>ucapkan(pesanPulang(now)), 1500);
-  }catch(ex){ btn.disabled=false; btn.textContent="Coba kirim lagi"; toast("Gagal mengirim. Periksa koneksi lalu coba lagi."); }
+  }catch(ex){ btn.disabled=false; btn.textContent="Coba kirim lagi"; toast(sebabGagal(ex)); }
 }
 
 /* ===================== Ekspor ===================== */
@@ -1074,7 +1083,7 @@ function openEnroll(after){
       await S.db.doc("wajah/"+S.me.uid).set(data);
       S.wajah = data;
       stopCam(); bell(); toast("Data wajah terkirim. Tunggu persetujuan admin."); closeSheet(); render(); if(after) after();
-    }catch(e){ msg("Gagal mengirim data wajah. Periksa koneksi lalu coba lagi."); }
+    }catch(e){ msg(sebabGagal(e)); }
   }
   (async()=>{
     unlockAudio();
