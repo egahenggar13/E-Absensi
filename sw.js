@@ -2,7 +2,7 @@
    - File aplikasi: ambil dari jaringan dulu, cadangan dari cache (agar pembaruan cepat sampai).
    - Pustaka & model wajah dari CDN: cache dulu (berukuran besar dan versinya dikunci).
    - Firebase/Firestore & cuaca: tidak dicampuri (selalu jaringan). */
-const VERSION = "e-absensi-v7";
+const VERSION = "e-absensi-v15";
 const SHELL = ["./", "./index.html", "./app.js", "./config.js", "./manifest.webmanifest",
   "./logo.png", "./icon-192.png", "./icon-512.png", "./maskable-512.png", "./apple-touch-icon.png"];
 const CDN = ["cdn.jsdelivr.net", "www.gstatic.com", "fonts.googleapis.com", "fonts.gstatic.com"];
@@ -17,7 +17,8 @@ self.addEventListener("fetch", e => {
   const req = e.request; if (req.method !== "GET") return;
   const url = new URL(req.url);
   if (url.origin === location.origin) {
-    e.respondWith(fetch(req).then(res => { const copy = res.clone(); caches.open(VERSION).then(c => c.put(req, copy)); return res; })
+    // Selalu tanya server dulu (lewati cache HTTP GitHub Pages) agar versi baru langsung terpakai
+    e.respondWith(fetch(req.url, { cache: "no-cache", credentials: "same-origin" }).then(res => { const copy = res.clone(); caches.open(VERSION).then(c => c.put(req, copy)); return res; })
       .catch(() => caches.match(req).then(r => r || caches.match("./index.html"))));
     return;
   }
