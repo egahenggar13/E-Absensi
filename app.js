@@ -178,6 +178,7 @@ function startSession(d){
   S.calMonth = dateKey().slice(0,7);
   if (d.role === "admin") {
     S.subs.push(S.db.collection("izin").onSnapshot(q => { S.izin = q.docs.map(x=>({...x.data(), _id:x.id})); refresh("izin"); }, ()=>{}));
+    S.subs.push(S.db.collection("wajah").onSnapshot(q => { S.wajahAll = Object.fromEntries(q.docs.map(x=>[x.id, x.data()])); refresh("staff"); }, ()=>{}));
     S.subs.push(S.db.collection("staff").onSnapshot(q => { S.staff = q.docs.map(x=>({...x.data(), uid:x.id})).sort((a,b)=>String(a.nama).localeCompare(String(b.nama))); refresh("staff"); }, ()=>{}));
     subRekap();
   } else {
@@ -208,18 +209,36 @@ const WMO = c => c===0 ? ["sun","Cerah"] : c===1 ? ["sun","Cerah berawan"] : c==
   : (c===45||c===48) ? ["fog","Kabut"] : (c>=51&&c<=57) ? ["rain", c>=55?"Gerimis lebat":"Gerimis"] : (c>=61&&c<=67) ? ["rain", c>=65?"Hujan lebat":c>=63?"Hujan":"Hujan ringan"]
   : (c>=80&&c<=82) ? ["rain", c===82?"Hujan deras":"Hujan lokal"] : c>=95 ? ["storm", c>=96?"Badai petir lebat":"Badai petir"] : ["cloud","Berawan"];
 let wxTimer=null;
-async function loadWeather(){
+/* Lokasi cuaca: posisi GPS terakhir staf (dari absen) bila ada, selain itu KBRI KL */
+function wxLoc(){ try{ const g=JSON.parse(store.get("wxloc")||"null"); if(g && Date.now()-g.t < 6*3600e3) return g; }catch(e){} return { lat:3.1467, lng:101.7219 }; }
+let wxBusy=false;
+async function loadWeather(force){
+  if(wxBusy) return; wxBusy=true; if(force){ S.wxLoading=true; refresh("cuaca"); }
   try{
-    const url="https://api.open-meteo.com/v1/forecast?latitude=3.1467&longitude=101.7219&current=temperature_2m,weather_code,is_day,precipitation&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max&timezone=Asia%2FKuala_Lumpur&forecast_days=1";
-    const d=await fetch(url).then(r=>r.json()); let [jenis,kondisi]=WMO(d.current.weather_code);
-    // Kode cuaca kadang masih "mendung" padahal curah hujan jam ini sudah tercatat: tampilkan sebagai hujan
-    const mm=+d.current.precipitation||0;
-    if(mm>0 && (jenis==="cloud"||jenis==="sun"||jenis==="fog")){ jenis="rain"; kondisi = mm<0.5 ? "Gerimis" : mm<2.5 ? "Hujan ringan" : "Hujan"; }
-    S.cuaca={ suhu:d.current.temperature_2m, kondisi, jenis, siang:!!d.current.is_day, tinggi:d.daily.temperature_2m_max[0], rendah:d.daily.temperature_2m_min[0], hujan:d.daily.precipitation_probability_max[0], diperbarui:new Date().toISOString() };
-    store.set("cuaca", JSON.stringify(S.cuaca)); refresh("cuaca");
-  }catch(e){ try{ const c=JSON.parse(store.get("cuaca")||"null"); if(c){ S.cuaca=c; refresh("cuaca"); } }catch(_){} }
+    const L=wxLoc();
+    const url=`https://api.open-meteo.com/v1/forecast?latitude=${L.lat.toFixed(4)}&longitude=${L.lng.toFixed(4)}`
+      + "&current=temperature_2m,apparent_temperature,weather_code,is_day,precipitation,rain,showers"
+      + "&minutely_15=precipitation,weather_code&forecast_minutely_15=4&past_minutely_15=1"
+      + "&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max&timezone=Asia%2FKuala_Lumpur&forecast_days=1";
+    const d=await fetch(url,{cache:"no-store"}).then(r=>r.json());
+    let [jenis,kondisi]=WMO(d.current.weather_code);
+    // Curah hujan 15 menit terakhir/berjalan lebih cepat menangkap hujan dibanding kode cuaca per jam
+    const m15=d.minutely_15?.precipitation||[], mm=Math.max(+d.current.precipitation||0, +d.current.rain||0, +d.current.showers||0, +(m15[0]||0), +(m15[1]||0));
+    const c15=(d.minutely_15?.weather_code||[]).slice(0,2).map(Number);
+    if(c15.some(c=>c>=95)){ jenis="storm"; kondisi="Badai petir"; }
+    else if(mm>0 && (jenis==="cloud"||jenis==="sun"||jenis==="fog")){ jenis="rain"; kondisi = mm<0.5 ? "Gerimis" : mm<2.5 ? "Hujan ringan" : "Hujan"; }
+    const akan=m15.slice(1).some(x=>+x>0) && jenis!=="rain" && jenis!=="storm";
+    S.cuaca={ suhu:d.current.temperature_2m, terasa:d.current.apparent_temperature, kondisi, jenis, siang:!!d.current.is_day, akanHujan:akan,
+      tinggi:d.daily.temperature_2m_max[0], rendah:d.daily.temperature_2m_min[0], hujan:d.daily.precipitation_probability_max[0], diperbarui:new Date().toISOString() };
+    store.set("cuaca", JSON.stringify(S.cuaca));
+  }catch(e){ try{ const c=JSON.parse(store.get("cuaca")||"null"); if(c) S.cuaca=c; }catch(_){} if(force) toast("Cuaca belum bisa diperbarui. Periksa koneksi."); }
+  wxBusy=false; S.wxLoading=false; refresh("cuaca");
 }
-function startWeather(){ if(wxTimer) return; loadWeather(); wxTimer=setInterval(loadWeather, 30*60*1000); }
+/* Perbarui tiap 10 menit, dan langsung saat aplikasi dibuka kembali bila data > 5 menit */
+function startWeather(){
+  if(wxTimer) return; loadWeather(); wxTimer=setInterval(()=>{ if(!document.hidden) loadWeather(); }, 10*60*1000);
+  document.addEventListener("visibilitychange", ()=>{ if(!document.hidden && S.me && (!S.cuaca || Date.now()-new Date(S.cuaca.diperbarui) > 5*60*1000)) loadWeather(); });
+}
 const WX_ICON = {
   sun:'<svg viewBox="0 0 48 48"><circle cx="24" cy="24" r="10" fill="#FFE27A"/><g stroke="#FFF3B0" stroke-width="3.5" stroke-linecap="round"><path d="M24 4v6M24 38v6M4 24h6M38 24h6M9.9 9.9l4.2 4.2M33.9 33.9l4.2 4.2M9.9 38.1l4.2-4.2M33.9 14.1l4.2-4.2"/></g></svg>',
   moon:'<svg viewBox="0 0 48 48"><path d="M31 6a17 17 0 1 0 11 29A14 14 0 0 1 31 6z" fill="#FFF1B8"/><circle cx="12" cy="10" r="1.6" fill="#fff"/><circle cx="40" cy="14" r="1.2" fill="#fff"/></svg>',
@@ -249,6 +268,7 @@ function skyLayer(key){
   if(j==="fog") for(let i=0;i<4;i++) parts.push(`<i class="mist" style="top:${20+i*22}%;animation-duration:${(20+r()*20)|0}s"></i>`);
   return `<div class="sky" aria-hidden="true">${parts.join("")}</div>`;
 }
+function menitLalu(iso){ const m=Math.round((Date.now()-new Date(iso))/60000); return m<1 ? "baru saja" : m<60 ? `${m} mnt lalu` : `${Math.round(m/60)} jam lalu`; }
 function weatherInline(){
   const key=skyKey(); if(!key) return "";
   const w=S.cuaca, ic = key.startsWith("clear") ? WX_ICON.moon : key.startsWith("sun") ? WX_ICON.sun : (WX_ICON[key.split("-")[0]]||WX_ICON.cloud);
@@ -257,7 +277,7 @@ function weatherInline(){
     <div class="tmp">${Math.round(w.suhu)}°</div>
     <div class="cnd">${ic}<span>${esc(w.kondisi)}</span></div>
     ${typeof w.tinggi==="number"?`<div class="hl">T:${Math.round(w.tinggi)}°  R:${Math.round(w.rendah)}°${typeof w.hujan==="number"?` · ☂${w.hujan}%`:''}</div>`:''}
-    <div class="src">Kuala Lumpur</div>
+    <button type="button" class="src" id="wxRefresh" aria-label="Perbarui cuaca">${S.wxLoading?'Memperbarui…':`${w.akanHujan?'Hujan dalam 1 jam · ':''}${menitLalu(w.diperbarui)} · ↻`}</button>
   </div>`;
 }
 
@@ -427,10 +447,13 @@ function viewProfil(){
   <button class="btn danger block" id="logout">Keluar</button>`;
 }
 function faceCard(){
-  const w=S.wajah;
-  return `<div class="card stack"><div class="row between"><h3 style="font-size:16px">Data wajah</h3>${w?'<span class="pill p-ok">Terdaftar</span>':'<span class="pill p-bad">Belum terdaftar</span>'}</div>
-    <p class="small muted">${w?`Didaftarkan ${esc(new Date(w.dibuat).toLocaleDateString("id-ID",{timeZone:TZ,day:"numeric",month:"long",year:"numeric"}))}. Untuk mengulang pendaftaran, minta admin menghapus data wajahmu.`:'Daftarkan wajahmu sekali sebelum absen. Wajah dicocokkan setiap kali absen masuk atau pulang.'}</p>
-    ${w?'':'<button class="btn primary" id="enrollBtn">Daftarkan wajah</button>'}</div>`;
+  const w=S.wajah, ok=w?.disetujui===true;
+  const pill = !w ? '<span class="pill p-bad">Belum terdaftar</span>' : ok ? '<span class="pill p-ok">Disetujui</span>' : '<span class="pill p-warn">Menunggu admin</span>';
+  const ket = !w ? 'Daftarkan wajahmu sekali. Setelah disetujui admin, wajah dicocokkan setiap kali absen.'
+    : ok ? `Disetujui ${esc(new Date(w.disetujuiPada||w.dibuat).toLocaleDateString("id-ID",{timeZone:TZ,day:"numeric",month:"long",year:"numeric"}))}. Untuk mengulang pendaftaran, minta admin menghapus data wajahmu.`
+    : 'Data wajahmu sudah terkirim dan sedang menunggu pemeriksaan admin. Absen bisa dilakukan setelah disetujui.';
+  return `<div class="card stack"><div class="row between"><h3 style="font-size:16px">Data wajah</h3>${pill}</div>
+    <p class="small muted">${ket}</p>${w?'':'<button class="btn primary" id="enrollBtn">Daftarkan wajah</button>'}</div>`;
 }
 
 function pwCard(){
@@ -486,12 +509,14 @@ function exportCard(){
   </div>`;
 }
 
+function wajahPill(uid){ const w=(S.wajahAll||{})[uid]; return !w ? '<span class="pill p-mute">Wajah belum</span>' : w.disetujui===true ? '<span class="pill p-ok">Wajah OK</span>' : '<span class="pill p-warn">Wajah menunggu</span>'; }
 function viewStaff(){
-  const list = S.staff;
+  const list = S.staff, tunggu = list.filter(s=>{ const w=(S.wajahAll||{})[s.uid]; return w && w.disetujui!==true; });
   return `<div class="row between"><div><span class="eyebrow">${list.filter(s=>s.role!=='admin').length} staf terdaftar</span><h2 style="font-size:24px">Data Staf</h2></div><button class="btn primary" id="addStaff">+ Tambah</button></div>
+  ${tunggu.length?`<div class="card flat libur-info small"><b>${tunggu.length} data wajah menunggu persetujuan.</b> Buka "Ubah" pada staf bertanda kuning untuk memeriksa fotonya.</div>`:''}
   <div class="card">${list.length?`<div class="list">${list.map(s=>`<div class="item"><div class="ini" ${s.aktif===false?'style="background:var(--surface-2);color:var(--muted)"':''}>${esc(initials(s.nama))}</div>
     <div class="grow"><div class="name">${esc(s.nama)}</div><div class="sub">${esc(s.fungsi)} · @${esc(s.username)}</div>
-    <div style="margin-top:4px">${s.role==='admin'?'<span class="pill p-info">Admin</span>':''} ${s.aktif===false?'<span class="pill p-mute">Nonaktif</span>':''}</div></div>
+    <div style="margin-top:4px">${s.role==='admin'?'<span class="pill p-info">Admin</span>':''} ${s.aktif===false?'<span class="pill p-mute">Nonaktif</span>':''} ${s.role!=='admin'?wajahPill(s.uid):''}</div></div>
     <button class="btn ghost" data-edit="${esc(s.uid)}">Ubah</button></div>`).join("")}</div>`
     : `<div class="empty">${I.team}<p>Belum ada staf. Tekan <b>Tambah</b> untuk mendaftarkan staf pertama.</p></div>`}</div>`;
 }
@@ -549,6 +574,7 @@ function bindView(){
   $("#pwForm") && ($("#pwForm").onsubmit = changePw);
   $("#enrollBtn") && ($("#enrollBtn").onclick = ()=>openEnroll());
   $("#izinBtn") && ($("#izinBtn").onclick = ()=>openIzinForm());
+  $("#wxRefresh") && ($("#wxRefresh").onclick = ()=>loadWeather(true));
   document.querySelectorAll("[data-cal]").forEach(b=>b.onclick=()=>{ S.calMonth=shiftMonth(S.calMonth,+b.dataset.cal); if(S.tab==="kalender") loadKalAdmin(); render(); });
   document.querySelectorAll("[data-berkas]").forEach(b=>b.onclick=()=>openBerkas(b.dataset.berkas, b.dataset.nama));
   document.querySelectorAll("[data-hapusizin]").forEach(b=>b.onclick=()=>hapusIzin(b.dataset.hapusizin));
@@ -612,6 +638,7 @@ function openStaffForm(s){
       </div>
       <p id="sErr" class="small" style="color:var(--bad);font-weight:600" hidden></p>
       <button class="cta" type="submit">${isNew?'Simpan staf':'Simpan perubahan'}</button>
+      ${isNew?'':faceAdminBox(s)}
       ${isNew?'':`<button type="button" class="btn ghost block" id="sFace">Hapus data wajah (daftar ulang)</button><div id="delZone"><button type="button" class="btn danger block" id="sDel">Hapus staf</button></div>
       <p class="small muted">Lupa password: hapus akun ini di Firebase Console → Authentication, lalu tambahkan lagi dengan username yang sama.</p>`}
     </form>`);
@@ -637,6 +664,9 @@ function openStaffForm(s){
       closeSheet(); toast(isNew?"Staf ditambahkan.":"Data staf diperbarui.");
     } catch(ex){ const c=ex?.code||""; fail(/email-already-in-use/.test(c) ? "Username sudah dipakai." : /weak-password/.test(c) ? "Password terlalu lemah." : "Gagal menyimpan. Periksa koneksi lalu coba lagi."); }
   };
+  $("#sApprove") && ($("#sApprove").onclick = async ()=>{
+    try{ await S.db.doc("wajah/"+s.uid).update({ disetujui:true, disetujuiPada:new Date().toISOString(), disetujuiOleh:S.me.uid }); toast("Data wajah disetujui."); closeSheet(); }catch(e){ toast("Gagal menyetujui."); }
+  });
   $("#sFace") && ($("#sFace").onclick = async ()=>{
     try{ await S.db.doc("wajah/"+s.uid).delete(); toast("Data wajah dihapus. Staf bisa mendaftar ulang dari Profil."); }catch(e){ toast("Gagal menghapus data wajah."); }
   });
@@ -689,6 +719,7 @@ function stepLokasi(){
   });
 }
 function setPos(lat,lng,acc,mode){
+  if(mode==="gps") store.set("wxloc", JSON.stringify({lat,lng,t:Date.now()}));
   const {premis, terdekat} = detectPremis(lat,lng), dalam = !!premis, ref = premis||terdekat;
   F.pos={lat:+lat.toFixed(6),lng:+lng.toFixed(6),akurasi:Math.round(acc||0),jarak:Math.round(ref.jarak),dalamRadius:dalam,
          premisId:dalam?premis.id:"", premisNama:dalam?premis.nama:"Di luar premis", terdekat:terdekat.nama, mode};
@@ -705,46 +736,80 @@ function setPos(lat,lng,acc,mode){
 
 async function stepWajah(){
   if (S.wajah === null) {
-    $("#sheetBody").innerHTML = flowHead(2,"Wajah belum terdaftar","Daftarkan wajahmu sekali, lalu lanjutkan absen.") +
+    $("#sheetBody").innerHTML = flowHead(2,"Wajah belum terdaftar","Daftarkan wajahmu sekali. Setelah disetujui admin, kamu bisa absen.") +
       `<div class="stack" style="margin-top:16px"><button class="cta" id="goEnroll">${I.face} Daftarkan wajah sekarang</button><button class="btn block" id="fCancel">Batal</button></div>`;
-    $("#goEnroll").onclick=()=>openEnroll(()=>{ openSheet(""); stepWajah(); }); $("#fCancel").onclick=closeSheet; return;
+    $("#goEnroll").onclick=()=>openEnroll(); $("#fCancel").onclick=closeSheet; return;
   }
-  $("#sheetBody").innerHTML = flowHead(2,"Scan wajah","Lihat ke kamera. Wajah dipindai otomatis.") +
+  if (S.wajah && S.wajah.disetujui !== true) {
+    $("#sheetBody").innerHTML = flowHead(2,"Menunggu persetujuan admin","Data wajahmu sudah terkirim. Absen bisa dilakukan setelah admin memeriksa dan menyetujuinya.") +
+      `<div class="stack" style="margin-top:16px"><button class="btn block" id="fCancel">Tutup</button></div>`;
+    $("#fCancel").onclick=closeSheet; return;
+  }
+  solidSheet();
+  $("#sheetBody").innerHTML = flowHead(2,"Scan wajah","Lihat lurus ke kamera dan tahan sebentar.") +
    `<div class="scanner" id="scan" style="margin-top:18px"><div class="ring spin"></div><span class="muted small">Membuka kamera…</span></div>
-    <p class="small muted" id="scanMsg" style="text-align:center;margin-top:12px;min-height:2.6em"></p>
+    <div class="steps" id="vSteps" style="margin-top:12px"><i></i><i></i><i></i></div>
+    <p class="small muted" id="scanMsg" style="text-align:center;min-height:2.6em"></p>
     <div class="stack" id="faceAct" style="margin-top:6px"><button class="btn block" id="fBack">Kembali</button></div>`;
-  const back=()=>{ stopCam(); setPos(F.pos.lat,F.pos.lng,F.pos.akurasi,F.pos.mode); if(F.ket&&$("#gKet")) $("#gKet").value=F.ket; };
+  const back=()=>{ S.scanToken=(S.scanToken||0)+1; stopCam(); setPos(F.pos.lat,F.pos.lng,F.pos.akurasi,F.pos.mode); if(F.ket&&$("#gKet")) $("#gKet").value=F.ket; };
   $("#fBack").onclick=back;
   const box=$("#scan"), msg=t=>{ const m=$("#scanMsg"); if(m) m.textContent=t; };
+  const mark=n=>document.querySelectorAll("#vSteps i").forEach((el,i)=>el.classList.toggle("on", i<n));
   let v=null;
   try { v = await openCamera(box); } catch(e){ v=null; }
   if(!$("#scan")) return;
-  if(!v){ return photoFallback(back, src=>faceCaptured(src,false)); }
+  if(!v){
+    box.innerHTML=`<div class="ring" style="border-color:var(--bad)"></div><span style="color:var(--bad)">${I.face.replace('width="22" height="22"','width="64" height="64"')}</span>`;
+    msg("Kamera langsung dibutuhkan untuk cek wajah hidup. Izinkan akses kamera untuk situs ini di pengaturan browser (Safari: aA → Pengaturan Situs Web → Kamera → Izinkan), lalu coba lagi.");
+    $("#faceAct").innerHTML=`<button class="cta" id="fRetake">Coba lagi</button><button class="btn block" id="fBack">Kembali</button>`;
+    $("#fRetake").onclick=stepWajah; $("#fBack").onclick=back; return;
+  }
   msg("Menyiapkan pengenal wajah… (pertama kali butuh beberapa detik)");
   try { await loadFace(); } catch(e){ msg(e.message); return; }
-  box.insertAdjacentHTML("beforeend",'<div class="scanline"></div>');
   const token = (S.scanToken = (S.scanToken||0)+1);
-  let gagal=0;
-  while ($("#vid") && S.scanToken===token) {
-    msg(gagal ? "Belum cocok. Hadapkan wajah lurus ke kamera dengan cahaya cukup." : "Memindai… lihat lurus ke kamera.");
-    const frame = grabFrame(v);
+  let cocok=[], percobaan=0, terakhir=null;
+  const MAKS = 14;
+  while ($("#vid") && S.scanToken===token && percobaan < MAKS) {
+    const frame = grabFrame(v, 480);
+    if (ketajaman(frame) < TAJAM_MIN) { msg("Gambar buram. Tahan HP agar tidak goyang."); await sleep(250); continue; }
     let r; try { r = await faceDescriptor(frame, true); } catch(e){ r={err:e.message}; }
     if (!$("#vid") || S.scanToken!==token) return;
-    if (r.d && S.wajah?.descriptor) {
-      const jarak = faceDist(r.d, S.wajah.descriptor);
-      if (jarak <= FACE_THRESHOLD) {
-        stopCam(); F.face={ cocok:true, jarak:+jarak.toFixed(3) };
-        box.innerHTML=`<img src="${frame.toDataURL("image/jpeg",.8)}" class="noflip" alt="Foto wajah"><div class="ring"></div>`;
-        $("#scanMsg").textContent="";
-        $("#faceAct").innerHTML=`<div style="text-align:center"><span class="pill p-ok">Wajah cocok · skor ${jarak.toFixed(2)}</span></div><button class="cta" id="fNext">Lanjut ke konfirmasi</button><button class="btn block" id="fRetake">Ulangi</button>`;
-        $("#fNext").onclick=stepKonfirmasi; $("#fRetake").onclick=stepWajah; return;
-      }
-      gagal++;
-      if (gagal>=6) { msg(`Wajah tidak cocok dengan akun ini (skor ${jarak.toFixed(2)}). Pastikan yang absen adalah pemilik akun.`); await sleep(1500); }
-    } else if (r.err) msg(r.err);
-    await sleep(450);
+    if (r.err) { msg(r.err); await sleep(300); continue; }
+    percobaan++;
+    const jarak = jarakKe(r.d, S.wajah);
+    if (jarak <= FACE_THRESHOLD) { cocok.push(jarak); terakhir=frame; mark(cocok.length); msg(`Memverifikasi… ${cocok.length} dari 3`); }
+    else { cocok=[]; mark(0); msg("Wajah belum cocok. Hadap lurus ke kamera."); }
+    if (cocok.length >= 3) {
+      const rata = cocok.reduce((a,b)=>a+b,0)/cocok.length;
+      // Liveness: 2 tantangan acak, lalu cek ulang identitas agar wajah tidak ditukar di tengah jalan
+      const live = await cekHidup(v, msg, token, 2);
+      if (!$("#vid") || S.scanToken!==token) return;
+      if (!live.ok) { stopCam(); return gagalHidup(box, live.alasan); }
+      const akhir = grabFrame(v, 480); let r2; try{ r2=await faceDescriptor(akhir, true); }catch(e){ r2={err:e.message}; }
+      if (r2.err || jarakKe(r2.d, S.wajah) > FACE_THRESHOLD) { stopCam(); return gagalHidup(box, "Wajah berganti saat verifikasi. Ulangi dengan wajah pemilik akun."); }
+      stopCam(); F.face={ cocok:true, jarak:+rata.toFixed(3), frame:3, liveness:live.tantangan };
+      return sukses(box, akhir, rata);
+    }
+    await sleep(200);
   }
+  if (!$("#vid") || S.scanToken!==token) return;
+  stopCam();
+  box.innerHTML=`<div class="ring" style="border-color:var(--bad)"></div><span style="color:var(--bad)">${I.face.replace('width="22" height="22"','width="64" height="64"')}</span>`;
+  msg("");
+  $("#faceAct").innerHTML=`<div class="card flat" style="text-align:center;color:var(--bad)"><b>Wajah tidak cocok dengan akun ini.</b><p class="small">Absen hanya bisa dilakukan oleh pemilik akun.</p></div>
+    <button class="cta" id="fRetake">Coba lagi</button><button class="btn block" id="fBack2">Batal</button>`;
+  $("#fRetake").onclick=stepWajah; $("#fBack2").onclick=closeSheet;
 }
+/* Hasil cocok: foto beku yang tajam + tanda centang, lalu otomatis lanjut */
+function sukses(box, frame, rata){
+  box.innerHTML=`<img src="${frame.toDataURL("image/jpeg",.92)}" class="noflip" alt="Wajah terverifikasi"><div class="ok-badge">${I.tick}</div>`;
+  box.classList.add("verified");
+  const m=$("#scanMsg"); if(m) m.textContent="";
+  $("#faceAct").innerHTML=`<div style="text-align:center"><span class="pill p-ok">Wajah cocok · skor ${rata.toFixed(2)}</span></div>`;
+  setTimeout(()=>{ if($("#scan")?.classList.contains("verified")) stepKonfirmasi(); }, 900);
+}
+/* Selama alur kamera, sheet dibuat padat (tanpa efek buram) agar tampilan fokus */
+function solidSheet(){ document.querySelector(".sheet")?.classList.add("cam"); document.querySelector(".scrim")?.classList.add("cam"); }
 const sleep = ms => new Promise(r=>setTimeout(r,ms));
 /* Kamera depan langsung di halaman. iPhone butuh play() eksplisit dan tidak menggambar video di bawah lapisan blur, jadi blur sheet dimatikan selama kamera aktif. */
 async function openCamera(box){
@@ -780,21 +845,21 @@ function photoFallback(onBack, onPhoto){
 }
 /* Pencocokan wajah: deteksi + sidik wajah 128 angka (face-api), dibandingkan dengan data terdaftar */
 async function faceCaptured(src,flipped){
-  $("#scan").innerHTML=`<img id="faceImg" src="${src}" class="${flipped?'noflip':''}" alt="Foto wajah"><div class="ring spin"></div><div class="scanline"></div>`;
+  solidSheet();
+  $("#scan").innerHTML=`<img id="faceImg" src="${src}" class="${flipped?'noflip':''}" alt="Foto wajah"><div class="ring spin"></div>`;
   $("#faceAct").innerHTML=`<p class="muted" style="text-align:center;font-weight:600">Mencocokkan wajah…</p>`;
   let res;
   try { res = await faceDescriptor(src); } catch(e){ res = { err: e.message||String(e) }; }
   if(!$("#scan")) return;
-  $("#scan").querySelector(".ring")?.classList.remove("spin"); $("#scan").querySelector(".scanline")?.remove();
+  $("#scan").querySelector(".ring")?.classList.remove("spin");
   const retry = msg => { $("#faceAct").innerHTML=`<div style="text-align:center"><span class="pill p-bad">${esc(msg)}</span></div><button class="cta" id="fRetake">Ulangi foto</button><button class="btn block" id="fBack2">Batal</button>`; $("#fRetake").onclick=stepWajah; $("#fBack2").onclick=closeSheet; };
   if(res.err) return retry(res.err);
-  if(!S.wajah?.descriptor) return retry("Data wajah belum termuat. Coba lagi sebentar.");
-  const jarak = faceDist(res.d, S.wajah.descriptor);
-  if(jarak > FACE_THRESHOLD) return retry(`Wajah tidak cocok dengan akun ini (skor ${jarak.toFixed(2)})`);
-  F.face={ cocok:true, jarak:+jarak.toFixed(3) };
-  $("#faceAct").innerHTML=`<div style="text-align:center"><span class="pill p-ok">Wajah cocok · skor ${jarak.toFixed(2)}</span><p class="small muted" style="margin-top:6px">Foto tidak disimpan, hanya hasil pencocokan.</p></div>
-    <button class="cta" id="fNext">Lanjut ke konfirmasi</button><button class="btn block" id="fRetake">Ulangi foto</button>`;
-  $("#fNext").onclick=stepKonfirmasi; $("#fRetake").onclick=stepWajah;
+  if(!S.wajah?.descriptor || S.wajah.disetujui!==true) return retry("Data wajah belum disetujui admin.");
+  const jarak = jarakKe(res.d, S.wajah);
+  if(jarak > FACE_THRESHOLD - 0.04) return retry("Wajah tidak cocok dengan akun ini.");
+  F.face={ cocok:true, jarak:+jarak.toFixed(3), frame:1 };
+  const img=await loadImg(src), c=document.createElement("canvas"); c.width=img.width; c.height=img.height; c.getContext("2d").drawImage(img,0,0);
+  sukses($("#scan"), c, jarak);
 }
 
 function stepKonfirmasi(){
@@ -818,7 +883,7 @@ function stepKonfirmasi(){
       <div class="row between"><span class="muted">Premis</span><span class="premis" style="${F.pos.dalamRadius?'':'background:var(--bad-soft);color:var(--bad)'}">${I.bldg}${esc(F.pos.premisNama)}</span></div>
       ${!isIn && tr?.masuk ? `<div class="row between"><span class="muted">Jam kerja</span><b class="mono">${fmtDur(durMin(tr.masuk.ts,now.toISOString()))}</b></div>` : ''}
       ${!isIn && !tr?.masuk ? `<div class="row between"><span class="muted">Catatan</span><span class="pill p-bad">Tanpa absen masuk</span></div>` : ''}
-      <div class="row between"><span class="muted">Wajah</span><span class="pill p-ok">Cocok · skor ${F.face?.jarak ?? "-"}</span></div>
+      <div class="row between"><span class="muted">Wajah</span><span class="pill p-ok">Cocok · ${F.face?.liveness?'wajah hidup ✓':'skor '+(F.face?.jarak ?? "-")}</span></div>
       ${F.ket?`<div class="row between"><span class="muted">Keterangan</span><b style="text-align:right">${esc(F.ket)}</b></div>`:''}
     </div>
     <div class="stack" style="margin-top:16px"><button class="cta ${isIn?'':'out'}" id="kSend">${isIn?I.in:I.out} Kirim absen ${F.jenis}</button><button class="btn block" id="kCancel">Batal</button></div>`;
@@ -938,7 +1003,7 @@ async function doExport(kind){
 
 
 /* ===================== Data wajah ===================== */
-const FACE_THRESHOLD = 0.55;       // jarak Euclid: makin kecil makin mirip; 0.5 = ketat namun wajar
+const FACE_THRESHOLD = 0.42;       // jarak Euclid: makin kecil makin mirip; 0.5 = ketat namun wajar
 const FACE_LIB = "https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.15/dist/face-api.js";
 const FACE_MODELS = "https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.15/model/";
 let facePromise = null;
@@ -947,7 +1012,7 @@ function loadFace(){
   facePromise = (async () => {
     if (!window.faceapi) await new Promise((ok,no)=>{ const s=document.createElement("script"); s.src=FACE_LIB; s.onload=ok; s.onerror=()=>no(new Error("Gagal memuat pengenal wajah. Periksa koneksi.")); document.head.appendChild(s); });
     await faceapi.nets.tinyFaceDetector.loadFromUri(FACE_MODELS);
-    await faceapi.nets.faceLandmark68TinyNet.loadFromUri(FACE_MODELS);
+    await faceapi.nets.faceLandmark68Net.loadFromUri(FACE_MODELS);
     await faceapi.nets.faceRecognitionNet.loadFromUri(FACE_MODELS);
   })();
   facePromise.catch(()=>{ facePromise=null; });
@@ -957,63 +1022,85 @@ function loadImg(src){ return new Promise((ok,no)=>{ const i=new Image(); i.onlo
 async function faceDescriptor(src, live=false){
   await loadFace();
   const img = typeof src==="string" ? await loadImg(src) : src;
-  const opts = new faceapi.TinyFaceDetectorOptions({ inputSize: live?320:416, scoreThreshold: live?0.4:0.45 });
+  const opts = new faceapi.TinyFaceDetectorOptions({ inputSize:416, scoreThreshold:0.5 });
   const all = await faceapi.detectAllFaces(img, opts);
   if (!all.length) return { err:"Wajah belum terlihat. Hadapkan wajah ke kamera dengan cahaya cukup." };
   if (all.length > 1) return { err:"Terlihat lebih dari satu wajah. Pastikan hanya kamu di depan kamera." };
-  const r = await faceapi.detectSingleFace(img, opts).withFaceLandmarks(true).withFaceDescriptor();
+  const r = await faceapi.detectSingleFace(img, opts).withFaceLandmarks().withFaceDescriptor();
   if (!r) return { err:"Wajah kurang jelas. Dekatkan sedikit dan pastikan cahaya cukup." };
-  return { d: Array.from(r.descriptor) };
+  const W = img.width || img.naturalWidth, box = r.detection.box;
+  if (box.width < W*0.28) return { err:"Dekatkan wajah ke kamera." };
+  if (r.detection.score < 0.6) return { err:"Wajah kurang jelas. Hadap lurus ke kamera." };
+  return { d: Array.from(r.descriptor), skor:r.detection.score };
+}
+/* Ketajaman gambar (variansi Laplacian): menolak bingkai yang buram/goyang */
+function ketajaman(c){
+  const n=128, t=document.createElement("canvas"); t.width=t.height=n; const x=t.getContext("2d"); x.drawImage(c,0,0,n,n);
+  const d=x.getImageData(0,0,n,n).data, g=new Float32Array(n*n);
+  for(let i=0;i<n*n;i++) g[i]=.299*d[i*4]+.587*d[i*4+1]+.114*d[i*4+2];
+  let sum=0,sum2=0,k=0;
+  for(let y=1;y<n-1;y++) for(let xx=1;xx<n-1;xx++){ const i=y*n+xx, l=4*g[i]-g[i-1]-g[i+1]-g[i-n]-g[i+n]; sum+=l; sum2+=l*l; k++; }
+  const m=sum/k; return sum2/k-m*m;
+}
+const TAJAM_MIN = 60;
+/* Jarak ke data terdaftar: dibandingkan dengan rata-rata DAN setiap sampel, ambil yang paling ketat */
+function jarakKe(d, w){
+  const rata = faceDist(d, w.descriptor);
+  const sampel = Array.isArray(w.sampel) && w.sampel.length ? w.sampel.map(x=>faceDist(d, x.v||x)) : [rata];
+  const urut = [...sampel].sort((a,b)=>a-b), median = urut[Math.floor(urut.length/2)];
+  return Math.max(rata, median);
 }
 function faceDist(a,b){ let s=0; for(let i=0;i<a.length;i++){ const d=a[i]-b[i]; s+=d*d; } return Math.sqrt(s); }
 
 /* Pendaftaran: 3 foto, rata-rata sidik wajah disimpan ke wajah/{uid} (bukan fotonya) */
 function openEnroll(after){
   openSheet(`<span class="eyebrow">Pendaftaran wajah</span><h2 style="font-size:22px;margin-top:4px">Daftarkan wajahmu</h2>
-    <p class="small muted" style="margin-top:4px">Cukup lihat ke kamera beberapa detik. Wajah direkam otomatis 3 kali. Foto tidak disimpan, hanya sidik wajahnya.</p>
+    <p class="small muted" style="margin-top:4px">Lihat lurus ke kamera dan tahan beberapa detik. Wajah direkam otomatis 5 kali, lalu dikirim ke admin untuk disetujui.</p>
     <div class="scanner" id="scan" style="margin-top:16px"><div class="ring spin"></div><span class="muted small">Membuka kamera…</span></div>
-    <div class="steps" id="enSteps" style="margin-top:12px"><i></i><i></i><i></i></div>
+    <div class="steps" id="enSteps" style="margin-top:12px"><i></i><i></i><i></i><i></i><i></i></div>
     <p class="small muted" id="scanMsg" style="text-align:center;min-height:2.6em"></p>
     <div class="stack" id="faceAct"><button class="btn block" id="enCancel">Batal</button></div>`);
-  $("#enCancel").onclick=closeSheet;
+  solidSheet();
+  const cancel=()=>{ S.scanToken=(S.scanToken||0)+1; closeSheet(); };
+  $("#enCancel").onclick=cancel;
   const box=$("#scan"), msg=t=>{ const m=$("#scanMsg"); if(m) m.textContent=t; };
-  const shots=[], mark=()=>document.querySelectorAll("#enSteps i").forEach((el,i)=>el.classList.toggle("on", i<shots.length));
+  const N=5, shots=[]; let foto=null;
+  const mark=()=>document.querySelectorAll("#enSteps i").forEach((el,i)=>el.classList.toggle("on", i<shots.length));
   async function save(){
     const avg = shots[0].map((_,i)=>shots.reduce((t,d)=>t+d[i],0)/shots.length);
-    msg("Menyimpan…");
+    msg("Mengirim ke admin…");
     try{
-      await S.db.doc("wajah/"+S.me.uid).set({ descriptor:avg, dibuat:new Date().toISOString(), model:"face-api 1.7.15", sampel:shots.length });
-      S.wajah = { descriptor:avg, dibuat:new Date().toISOString() };
-      stopCam(); bell(); toast("Wajah berhasil didaftarkan."); closeSheet(); render(); if(after) after();
-    }catch(e){ msg("Gagal menyimpan data wajah. Periksa koneksi lalu coba lagi."); }
+      const data={ descriptor:avg, sampel:shots.map(v=>({v})), foto, disetujui:false, dibuat:new Date().toISOString(), model:"face-api 1.7.15 (68 titik)" };
+      await S.db.doc("wajah/"+S.me.uid).set(data);
+      S.wajah = data;
+      stopCam(); bell(); toast("Data wajah terkirim. Tunggu persetujuan admin."); closeSheet(); render(); if(after) after();
+    }catch(e){ msg("Gagal mengirim data wajah. Periksa koneksi lalu coba lagi."); }
   }
   (async()=>{
     unlockAudio();
     let v=null; try{ v=await openCamera(box); }catch(e){ v=null; }
     if(!$("#scan")) return;
-    if(!v){
-      // Cadangan: satu foto selfie sudah cukup untuk mendaftar
-      return photoFallback(closeSheet, async src=>{
-        $("#scan").innerHTML=`<img src="${src}" class="noflip" alt="Foto wajah"><div class="ring spin"></div>`; msg("Memproses foto…");
-        let r; try{ r=await faceDescriptor(src); }catch(e){ r={err:e.message}; }
-        if(r.err){ msg(r.err); return; }
-        shots.push(r.d); mark(); save();
-      });
-    }
+    if(!v){ msg("Kamera tidak bisa dibuka. Izinkan akses kamera untuk aplikasi ini di pengaturan browser, lalu coba lagi."); return; }
     msg("Menyiapkan pengenal wajah… (pertama kali butuh beberapa detik)");
     try{ await loadFace(); }catch(e){ msg(e.message); return; }
-    box.insertAdjacentHTML("beforeend",'<div class="scanline"></div>');
     const token = (S.scanToken = (S.scanToken||0)+1);
-    while($("#vid") && S.scanToken===token && shots.length<3){
-      let r; try{ r=await faceDescriptor(grabFrame(v), true); }catch(e){ r={err:e.message}; }
+    while($("#vid") && S.scanToken===token && shots.length<N){
+      const frame=grabFrame(v,480);
+      if(ketajaman(frame) < TAJAM_MIN){ msg("Gambar buram. Tahan HP agar tidak goyang."); await sleep(250); continue; }
+      let r; try{ r=await faceDescriptor(frame, true); }catch(e){ r={err:e.message}; }
       if(!$("#vid") || S.scanToken!==token) return;
-      if(r.d){
-        if(shots.length && faceDist(r.d, shots[0]) > 0.6){ shots.length=0; mark(); msg("Wajah berubah. Mengulang dari awal, tetap lihat ke kamera."); }
-        else { shots.push(r.d); mark(); msg(shots.length<3 ? `Bagus! Rekaman ${shots.length} dari 3. Tetap lihat ke kamera…` : "Selesai merekam."); }
-        await sleep(500);
-      } else { msg(r.err); await sleep(350); }
+      if(r.err){ msg(r.err); await sleep(300); continue; }
+      if(shots.length && faceDist(r.d, shots[0]) > 0.38){ shots.length=0; foto=null; mark(); msg("Wajah berubah. Mengulang dari awal, tetap lihat ke kamera."); await sleep(400); continue; }
+      if(!foto){ const t=document.createElement("canvas"); t.width=t.height=200; t.getContext("2d").drawImage(frame,0,0,200,200); foto=t.toDataURL("image/jpeg",.75); }
+      shots.push(r.d); mark(); msg(shots.length<N ? `Bagus! Rekaman ${shots.length} dari ${N}. Tetap lihat ke kamera…` : "Selesai merekam.");
+      await sleep(350);
     }
-    if(shots.length>=3) save();
+    if(shots.length>=N){
+      const live = await cekHidup(v, msg, token, 1);
+      if(!$("#vid") || S.scanToken!==token) return;
+      if(!live.ok){ stopCam(); msg(""); $("#faceAct").innerHTML=`<div class="card flat" style="text-align:center;color:var(--bad)"><b>${esc(live.alasan)}</b></div><button class="cta" id="enRetry">Ulangi pendaftaran</button><button class="btn block" id="enCancel2">Batal</button>`; $("#enRetry").onclick=()=>openEnroll(after); $("#enCancel2").onclick=closeSheet; return; }
+      save();
+    }
   })();
 }
 
@@ -1196,4 +1283,80 @@ async function hapusIzin(id){
       await S.db.doc("izin/"+id).delete(); closeSheet(); toast("Dihapus.");
     }catch(e){ toast("Gagal menghapus."); }
   };
+}
+
+
+/* Admin: periksa data wajah (foto saat pendaftaran) dan cek kemiripan dengan wajah staf lain */
+function faceAdminBox(st){
+  const w=(S.wajahAll||{})[st.uid];
+  if(!w) return `<div class="card flat small muted">Staf ini belum mendaftarkan wajah.</div>`;
+  const mirip = Object.entries(S.wajahAll||{}).filter(([uid,o])=>uid!==st.uid && o.descriptor).map(([uid,o])=>({uid, j:faceDist(w.descriptor,o.descriptor)})).filter(x=>x.j<0.5).sort((a,b)=>a.j-b.j);
+  const nama = uid => (S.staff.find(x=>x.uid===uid)||{}).nama || "staf lain";
+  return `<div class="card flat stack" style="gap:10px"><div class="row" style="gap:12px">
+      ${w.foto?`<img src="${w.foto}" alt="Foto pendaftaran wajah" style="width:84px;height:84px;border-radius:20px;object-fit:cover;flex:none">`:''}
+      <div style="min-width:0"><b>Data wajah</b><p class="small muted">Didaftarkan ${esc(new Date(w.dibuat).toLocaleString("id-ID",{timeZone:TZ,day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"}))}</p>
+      ${w.disetujui===true?'<span class="pill p-ok">Disetujui</span>':'<span class="pill p-warn">Menunggu persetujuan</span>'}</div></div>
+    ${mirip.length?`<div class="banner" style="color:var(--bad);background:var(--bad-soft)"><b>Peringatan:</b> wajah ini sangat mirip dengan ${mirip.map(x=>esc(nama(x.uid))).join(", ")}. Kemungkinan didaftarkan oleh orang lain. Hapus dan minta staf mendaftar ulang di depanmu.</div>`:''}
+    ${w.disetujui===true?'':`<p class="small muted">Pastikan foto ini benar wajah ${esc(st.nama)} sebelum menyetujui.</p><button type="button" class="btn primary block" id="sApprove">Setujui data wajah</button>`}
+  </div>`;
+}
+
+
+/* ===================== Liveness (cek wajah hidup) =====================
+   Tantangan acak dibaca dari 68 titik wajah:
+   - kedip: rasio bukaan mata (EAR) turun tajam lalu naik lagi
+   - toleh kiri/kanan: posisi ujung hidung bergeser dari tengah kedua mata
+   Foto atau layar diam tidak bisa memenuhi tantangan ini. */
+const TANTANGAN = {
+  kedip: { teks:"Kedipkan mata", ikon:"😉" },
+  kiri:  { teks:"Toleh pelan ke kiri", ikon:"⬅️" },
+  kanan: { teks:"Toleh pelan ke kanan", ikon:"➡️" }
+};
+function titikWajah(lm){
+  const p=lm.positions||lm._positions||lm, d=(a,b)=>Math.hypot(a.x-b.x,a.y-b.y);
+  const ear=(i)=> (d(p[i+1],p[i+5])+d(p[i+2],p[i+4]))/(2*d(p[i],p[i+3]));
+  const iod=d(p[36],p[45]), midX=(p[36].x+p[45].x)/2;
+  return { ear:(ear(36)+ear(42))/2, yaw:(p[30].x-midX)/iod };
+}
+async function bacaPose(v){
+  const f=grabFrame(v, 320);
+  const r=await faceapi.detectSingleFace(f, new faceapi.TinyFaceDetectorOptions({inputSize:320, scoreThreshold:0.45})).withFaceLandmarks();
+  return r ? titikWajah(r.landmarks) : null;
+}
+function acak(n){ const k=Object.keys(TANTANGAN).sort(()=>Math.random()-.5); if(n>1 && k[0]!=="kedip" && k[1]!=="kedip") k[1]="kedip"; return k.slice(0,n); }
+async function cekHidup(v, msg, token, n){
+  const daftar=acak(n), selesai=[];
+  const banner = t => { const sc=$("#scan"); if(!sc) return; let b=sc.querySelector(".live-tip"); if(!b){ b=document.createElement("div"); b.className="live-tip"; sc.appendChild(b); } b.innerHTML=`<span>${TANTANGAN[t].ikon}</span>${esc(TANTANGAN[t].teks)}`; };
+  // garis dasar: wajah lurus dengan mata terbuka
+  let dasar=null;
+  for(let i=0;i<12 && !dasar;i++){ const q=await bacaPose(v).catch(()=>null); if(!$("#vid")||S.scanToken!==token) return {ok:false}; if(q && Math.abs(q.yaw)<0.12 && q.ear>0.2) dasar=q; else { msg("Hadap lurus ke kamera."); await sleep(150); } }
+  if(!dasar) return { ok:false, alasan:"Wajah tidak terbaca dengan jelas. Hadap lurus ke kamera dengan cahaya cukup." };
+  for(const t of daftar){
+    banner(t); msg(`Cek wajah hidup ${selesai.length+1} dari ${daftar.length}: ${TANTANGAN[t].teks.toLowerCase()}.`);
+    const mulai=Date.now(); let tutup=false, berhasil=false;
+    while(Date.now()-mulai < 8000){
+      const q=await bacaPose(v).catch(()=>null);
+      if(!$("#vid")||S.scanToken!==token) return {ok:false};
+      if(q){
+        if(t==="kedip"){ if(q.ear < dasar.ear*0.62) tutup=true; else if(tutup && q.ear > dasar.ear*0.85){ berhasil=true; break; } }
+        if(t==="kiri" && q.yaw - dasar.yaw < -0.16){ berhasil=true; break; }
+        if(t==="kanan" && q.yaw - dasar.yaw > 0.16){ berhasil=true; break; }
+      }
+      await sleep(60);
+    }
+    if(!berhasil){ $("#scan")?.querySelector(".live-tip")?.remove(); return { ok:false, alasan:`Gerakan "${TANTANGAN[t].teks.toLowerCase()}" tidak terdeteksi. Ulangi dan lakukan dengan jelas.` }; }
+    selesai.push(t); msg("Bagus!"); await sleep(350);
+    if(t!=="kedip"){ // kembali menghadap depan sebelum tantangan berikutnya
+      const m2=Date.now(); while(Date.now()-m2<4000){ const q=await bacaPose(v).catch(()=>null); if(q && Math.abs(q.yaw-dasar.yaw)<0.08) break; msg("Kembali hadap lurus ke kamera."); await sleep(80); }
+    }
+  }
+  $("#scan")?.querySelector(".live-tip")?.remove();
+  return { ok:true, tantangan:selesai };
+}
+function gagalHidup(box, alasan){
+  box.innerHTML=`<div class="ring" style="border-color:var(--bad)"></div><span style="color:var(--bad)">${I.face.replace('width="22" height="22"','width="64" height="64"')}</span>`;
+  const m=$("#scanMsg"); if(m) m.textContent="";
+  $("#faceAct").innerHTML=`<div class="card flat" style="text-align:center;color:var(--bad)"><b>Cek wajah hidup gagal.</b><p class="small">${esc(alasan||"Ulangi dan ikuti instruksi di layar.")}</p></div>
+    <button class="cta" id="fRetake">Coba lagi</button><button class="btn block" id="fBack2">Batal</button>`;
+  $("#fRetake").onclick=stepWajah; $("#fBack2").onclick=closeSheet;
 }

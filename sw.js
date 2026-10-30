@@ -2,7 +2,7 @@
    - File aplikasi: ambil dari jaringan dulu, cadangan dari cache (agar pembaruan cepat sampai).
    - Pustaka & model wajah dari CDN: cache dulu (berukuran besar dan versinya dikunci).
    - Firebase/Firestore & cuaca: tidak dicampuri (selalu jaringan). */
-const VERSION = "e-absensi-v6";
+const VERSION = "e-absensi-v9";
 const SHELL = ["./", "./index.html", "./app.js", "./config.js", "./manifest.webmanifest",
   "./logo.png", "./icon-192.png", "./icon-512.png", "./maskable-512.png", "./apple-touch-icon.png"];
 const CDN = ["cdn.jsdelivr.net", "www.gstatic.com", "fonts.googleapis.com", "fonts.gstatic.com"];

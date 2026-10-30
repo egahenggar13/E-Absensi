@@ -159,7 +159,8 @@ p{margin:0}
 .wxi .cnd{display:flex;align-items:center;justify-content:flex-end;gap:5px;font-weight:700;font-size:13.5px;margin-top:4px}
 .wxi .cnd svg{width:20px;height:20px}
 .wxi .hl{font-size:12.5px;font-weight:600;opacity:.88;margin-top:2px}
-.wxi .src{font-size:10.5px;opacity:.7;margin-top:2px}
+.wxi .src{display:inline-block;font:inherit;font-size:11px;font-weight:600;color:inherit;opacity:.8;margin-top:4px;padding:3px 9px;border-radius:999px;border:1px solid rgba(255,255,255,.3);background:rgba(255,255,255,.12);cursor:pointer}
+.wxi .src:active{transform:scale(.96)}
 .hero .clock{font-family:var(--mono);font-size:52px;font-weight:700;letter-spacing:-.02em;line-height:1;margin-top:6px;text-shadow:0 2px 12px rgba(8,30,90,.25)}
 .hero .clock small{font-size:22px;opacity:.75}
 .hero .date{opacity:.9;font-weight:500}
@@ -329,6 +330,17 @@ input[type=file].input{padding:10px;font-size:14px}
 .nav button span{white-space:nowrap}
 .seg button{flex:1;border:none;background:transparent;border-radius:var(--r-pill);padding:10px;font-weight:700;font-size:13.5px;color:var(--muted)}
 .seg button.on{background:var(--primary);color:var(--primary-ink);box-shadow:inset 0 1px 0 rgba(255,255,255,.4)}
+
+/* hasil verifikasi wajah: tajam, tanpa blur */
+.scanner.verified{box-shadow:0 0 0 4px var(--ok),var(--glass-shadow)}
+.scanner img{image-rendering:auto;filter:none}
+.ok-badge{position:absolute;right:14px;bottom:14px;width:46px;height:46px;border-radius:50%;background:var(--ok);color:#fff;display:grid;place-items:center;box-shadow:0 6px 16px rgba(0,0,0,.3);animation:pop .35s cubic-bezier(.2,1.4,.4,1)}
+.ok-badge svg{width:26px;height:26px}
+@keyframes pop{from{transform:scale(.3);opacity:0}}
+.sheet.cam .card,.sheet.cam .card.flat{-webkit-backdrop-filter:none!important;backdrop-filter:none!important;background:var(--glass-strong)!important}
+
+.live-tip{position:absolute;left:50%;bottom:16px;transform:translateX(-50%);display:flex;align-items:center;gap:6px;white-space:nowrap;padding:8px 14px;border-radius:999px;background:rgba(10,20,40,.78);color:#fff;font-weight:800;font-size:14px;box-shadow:0 6px 18px rgba(0,0,0,.35);animation:pop .3s cubic-bezier(.2,1.4,.4,1)}
+.live-tip span{font-size:18px}
 </style>
 </head>
 <body>
