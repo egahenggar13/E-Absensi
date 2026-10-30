@@ -1,5 +1,5 @@
 const LOGO = "logo.png";
-const APP_VERSION = "Versi 10 · 30 Okt 2026";
+const APP_VERSION = "Versi 11 · 30 Okt 2026";
 
 /* ===================== Konfigurasi & util ===================== */
 const TZ = "Asia/Kuala_Lumpur";
@@ -1114,7 +1114,18 @@ function openEnroll(after){
 }
 
 /* ===================== PWA: service worker & tombol pasang ===================== */
-if ("serviceWorker" in navigator) window.addEventListener("load", () => navigator.serviceWorker.register("sw.js").catch(()=>{}));
+/* Pembaruan otomatis: cek versi baru saat dibuka / kembali ke aplikasi, lalu muat ulang sekali */
+if ("serviceWorker" in navigator) {
+  let sudahReload=false;
+  navigator.serviceWorker.addEventListener("controllerchange", () => { if(sudahReload) return; sudahReload=true; location.reload(); });
+  window.addEventListener("load", async () => {
+    try{
+      const reg = await navigator.serviceWorker.register("sw.js", { updateViaCache:"none" });
+      reg.update().catch(()=>{});
+      document.addEventListener("visibilitychange", () => { if(!document.hidden) reg.update().catch(()=>{}); });
+    }catch(e){}
+  });
+}
 
 let installEvt=null;
 window.addEventListener("beforeinstallprompt", e => { e.preventDefault(); installEvt=e; render(); });
